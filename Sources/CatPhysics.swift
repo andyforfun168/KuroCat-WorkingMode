@@ -23,7 +23,11 @@ enum EyeColorTheme: String, CaseIterable {
     case warmAmber = "琥珀金瞳"
     case iceCyan = "冰晶浅蓝"
     case softAmber = "柔和琥珀"
-    case referenceHazel = "淡金青绿（参考图）"
+    case referenceHazel = "淡金青绿"
+
+    static func saved(_ raw: String) -> Self {
+        raw == "淡金青绿（参考图）" ? .referenceHazel : (Self(rawValue: raw) ?? .neonChartreuse)
+    }
 
     var primaryColor: NSColor {
         switch self {
@@ -31,7 +35,7 @@ enum EyeColorTheme: String, CaseIterable {
         case .siameseBlue:    return NSColor(calibratedRed: 0.37, green: 0.78, blue: 0.98, alpha: 1.0) // #5EC7FA
         case .warmAmber:      return NSColor(calibratedRed: 0.98, green: 0.76, blue: 0.22, alpha: 1.0)
         case .iceCyan:        return NSColor(calibratedRed: 0.45, green: 0.92, blue: 0.96, alpha: 1.0)
-        case .referenceHazel: return NSColor(calibratedRed: 183.0/255, green: 165.0/255, blue: 112.0/255, alpha: 1)
+        case .referenceHazel: return NSColor(calibratedRed: 218.0/255, green: 178.0/255, blue: 87.0/255, alpha: 1)
         case .softAmber: return NSColor(calibratedRed: 217.0/255, green: 173.0/255, blue: 85.0/255, alpha: 1)
         }
     }
@@ -42,7 +46,7 @@ enum EyeColorTheme: String, CaseIterable {
         case .siameseBlue:    return NSColor(calibratedRed: 0.38, green: 0.80, blue: 0.99, alpha: 0.85)
         case .warmAmber:      return NSColor(calibratedRed: 0.98, green: 0.74, blue: 0.20, alpha: 0.85)
         case .iceCyan:        return NSColor(calibratedRed: 0.42, green: 0.90, blue: 0.98, alpha: 0.85)
-        case .referenceHazel: return NSColor(calibratedRed: 183.0/255, green: 165.0/255, blue: 112.0/255, alpha: 0.85)
+        case .referenceHazel: return NSColor(calibratedRed: 218.0/255, green: 178.0/255, blue: 87.0/255, alpha: 0.85)
         case .softAmber: return NSColor(calibratedRed: 217.0/255, green: 173.0/255, blue: 85.0/255, alpha: 0.85)
         }
     }
@@ -90,7 +94,8 @@ final class CatSettings {
         scale = savedScale > 0.3 ? CGFloat(savedScale) : 1.0
         coatTheme = CatCoatTheme(rawValue: d.string(forKey: "KuroCat.CoatTheme") ?? "") ?? .classicBlack
         keyboardTheme = KeyboardTheme(rawValue: d.string(forKey: "KuroCat.KeyboardTheme") ?? "") ?? .classicMilk
-        eyeTheme = EyeColorTheme(rawValue: d.string(forKey: "KuroCat.EyeTheme") ?? "") ?? .neonChartreuse
+        let savedEye = d.string(forKey: "KuroCat.EyeTheme") ?? ""
+        eyeTheme = EyeColorTheme.saved(savedEye)
     }
 }
 

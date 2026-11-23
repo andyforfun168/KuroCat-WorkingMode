@@ -12,6 +12,7 @@
 #include "InputEngine.hpp"
 #include "CatPhysics.hpp"
 #include "CatRenderer.hpp"
+#include "UpdateChecker.hpp"
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
@@ -55,6 +56,8 @@ enum MenuCmd : UINT {
     CMD_SCALE_150,
     CMD_DEMO_BURST,
     CMD_RESET_POS,
+    CMD_CHECK_UPDATE,
+    CMD_AUTO_UPDATE,
     CMD_QUIT
 };
 
@@ -310,7 +313,7 @@ void showContextMenu(AppState& app, POINT screenPt) {
     AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::WarmAmber ? MF_CHECKED : 0), CMD_EYE_AMBER, L"\u7425\u73C0\u91D1\u77B3");
     AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::IceCyan ? MF_CHECKED : 0), CMD_EYE_CYAN, L"\u51B0\u6676\u6D45\u84DD");
     AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::SoftAmber ? MF_CHECKED : 0), CMD_EYE_SOFT_AMBER, L"柔和琥珀");
-    AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::ReferenceHazel ? MF_CHECKED : 0), CMD_EYE_REFERENCE_HAZEL, L"淡金青绿（参考图）");
+    AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::ReferenceHazel ? MF_CHECKED : 0), CMD_EYE_REFERENCE_HAZEL, L"淡金青绿");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)eyeMenu, L"\u77B3\u8272\u5207\u6362");
 
     // Scale submenu
@@ -326,6 +329,9 @@ void showContextMenu(AppState& app, POINT screenPt) {
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, CMD_DEMO_BURST, L"\u6F14\u793A\u6253\u5B57\u52A8\u753B");
     AppendMenuW(menu, MF_STRING, CMD_RESET_POS, L"\u91CD\u7F6E\u4F4D\u7F6E\u5230\u53F3\u4E0B\u89D2");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, CMD_CHECK_UPDATE, L"检查更新…");
+    AppendMenuW(menu, MF_STRING | (KuroWinUpdate::automatic() ? MF_CHECKED : 0), CMD_AUTO_UPDATE, L"自动检查更新（每天一次）");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, CMD_QUIT, L"\u9000\u51FA KuroCat");
 
@@ -408,6 +414,8 @@ void showContextMenu(AppState& app, POINT screenPt) {
             app.settings.posY = -99999;
             applyWindowScaleAndPosition(app, false);
             break;
+        case CMD_CHECK_UPDATE: KuroWinUpdate::check(app.menuOwnerHwnd,true); break;
+        case CMD_AUTO_UPDATE: KuroWinUpdate::toggle(); break;
         case CMD_QUIT:
             PostQuitMessage(0);
             break;
@@ -504,11 +512,14 @@ void tickAndRender(AppState& app) {
 LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     AppState* app = g_app;
     switch (msg) {
+        case KuroWinUpdate::ResultMessage: KuroWinUpdate::complete(hwnd); return 0;
         case WM_INPUT:
             if (app) app->input.handleRawInput(lParam);
             return 0;
 
         case WM_TIMER:
+            if (wParam == 2) { KillTimer(hwnd,2); if(app)KuroWinUpdate::check(app->menuOwnerHwnd,false); }
+            if (wParam == 3 && app) KuroWinUpdate::check(app->menuOwnerHwnd,false);
             if (wParam == TIMER_RENDER && app) tickAndRender(*app);
             return 0;
 
@@ -606,6 +617,7 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_DESTROY:
             if (hwnd == (app ? app->hwnd : nullptr)) {
                 KillTimer(hwnd, TIMER_RENDER);
+                KillTimer(hwnd,2);KillTimer(hwnd,3);
                 if (app) {
                     if (app->menuOwnerHwnd) {
                         UnregisterHotKey(app->menuOwnerHwnd, HOTKEY_CLICKTHROUGH_ID);
@@ -727,6 +739,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     app.lastTickTime = nowSeconds();
     tickAndRender(app);
     SetTimer(app.hwnd, TIMER_RENDER, 16, nullptr);
+    SetTimer(app.hwnd,2,5000,nullptr);
+    SetTimer(app.hwnd,3,6*60*60*1000,nullptr);
 
     MSG msg = {};
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {

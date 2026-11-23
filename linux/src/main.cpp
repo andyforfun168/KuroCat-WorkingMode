@@ -13,6 +13,7 @@
 #include "InputEngine.hpp"
 #include "CatPhysics.hpp"
 #include "CatRenderer.hpp"
+#include "UpdateChecker.hpp"
 
 struct LinuxApp {
     GtkWidget* window = nullptr;
@@ -309,7 +310,7 @@ static void showPopupMenu(LinuxApp& app, GdkEventButton* evt) {
         addEye("琥珀金瞳", EyeColorTheme::WarmAmber);
         addEye("冰晶浅蓝", EyeColorTheme::IceCyan);
         addEye("柔和琥珀", EyeColorTheme::SoftAmber);
-        addEye("淡金青绿（参考图）", EyeColorTheme::ReferenceHazel);
+        addEye("淡金青绿", EyeColorTheme::ReferenceHazel);
         GtkWidget* parent = gtk_menu_item_new_with_label("瞳色切换");
         gtk_menu_item_set_submenu(GTK_MENU_ITEM(parent), sub);
         gtk_menu_shell_append(GTK_MENU_SHELL(menu), parent);
@@ -347,6 +348,12 @@ static void showPopupMenu(LinuxApp& app, GdkEventButton* evt) {
         g_app->settings.posY = -99999;
         applyWindowScaleAndPos(*g_app, false);
     }));
+    addSep();
+    addAction("检查更新…",G_CALLBACK(+[](GtkMenuItem*,gpointer){KuroLinuxUpdate::check(true);}));
+    GtkWidget* autoUpdate=gtk_check_menu_item_new_with_label("自动检查更新（每天一次）");
+    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(autoUpdate),KuroLinuxUpdate::automatic());
+    g_signal_connect(autoUpdate,"activate",G_CALLBACK(+[](GtkMenuItem*,gpointer){KuroLinuxUpdate::toggle();}),nullptr);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu),autoUpdate);
     addSep();
     addAction("退出 KuroCat", G_CALLBACK(+[](GtkMenuItem*, gpointer) {
         gtk_main_quit();
@@ -572,6 +579,8 @@ int main(int argc, char** argv) {
     app.lastTickTime = nowSeconds();
     g_timeout_add(16, onFrameTick, nullptr);
 
+    g_timeout_add_seconds(5,+[](gpointer)->gboolean{KuroLinuxUpdate::check(false);return G_SOURCE_REMOVE;},nullptr);
+    g_timeout_add_seconds(6*3600,+[](gpointer)->gboolean{KuroLinuxUpdate::check(false);return G_SOURCE_CONTINUE;},nullptr);
     gtk_main();
     app.input.stop();
     return 0;

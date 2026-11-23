@@ -122,7 +122,7 @@ private:
             case EyeColorTheme::SiameseBlue:    return { 0.37, 0.78, 0.98, 1.0 };
             case EyeColorTheme::WarmAmber:      return { 0.98, 0.76, 0.22, 1.0 };
             case EyeColorTheme::IceCyan:        return { 0.45, 0.92, 0.96, 1.0 };
-            case EyeColorTheme::ReferenceHazel: return {183.0/255,165.0/255,112.0/255,1};
+            case EyeColorTheme::ReferenceHazel: return {218.0/255,178.0/255,87.0/255,1};
             case EyeColorTheme::SoftAmber: return {217.0/255,173.0/255,85.0/255,1};
         }
         return { 0.79, 0.95, 0.25, 1.0 };
@@ -659,8 +659,8 @@ private:
         // Reference iris colors, blended only in a narrow ring around the moving pupil.
         if (eyeTheme == EyeColorTheme::ReferenceHazel) {
             for (int i = 0; i <= 24; ++i) {
-                double t = i / 24.0, mix = t*t*(3-2*t), rim = (1-t)*3.2;
-                cairo_set_source_rgb(cr, (183-42*mix)/255, (165-20*mix)/255, (112+16*mix)/255);
+                double t = i / 24.0, mix = t*t*(3-2*t), rim = (1-t)*2.2;
+                cairo_set_source_rgb(cr, (218-77*mix)/255, (178-33*mix)/255, (87+41*mix)/255);
                 cairo_new_path(cr);
                 fillEllipse(cr, px, py, pupilW*0.5+rim, pupilH*0.5+rim);
                 cairo_fill(cr);
@@ -714,8 +714,13 @@ private:
         float lDist = std::hypot(lPos.x - CatPhysics::LeftPawRest.x, lPos.y - CatPhysics::LeftPawRest.y);
         float rDist = std::hypot(rPos.x - CatPhysics::RightPawRest.x, rPos.y - CatPhysics::RightPawRest.y);
 
-        Pt lSh = { seatX - 24.0f, seatY - 56.0f + breath };
-        Pt rSh = { seatX + 24.0f, seatY - 56.0f + breath };
+        auto shoulder = [&](float x) -> Pt {
+            float sy=physics.bodySquash.value, sx=1+(1-sy)*0.55f;
+            float c=std::cos(physics.bodyTilt.value), s=std::sin(physics.bodyTilt.value);
+            float floor=126+physics.headOffsetY.value+physics.headPitch.value*4.8f+breath*1.1f+52;
+            return {seatX+x*sx*c+43*sy*s, std::max(seatY+x*sx*s-43*sy*c,floor)};
+        };
+        Pt lSh=shoulder(-20), rSh=shoulder(20);
 
         if (lDist < 6.0f && !physics.leftPawOnMouse && !physics.leftPawTyping) {
             drawIdleFrontLeg(cr, { seatX - 18.0f, seatY - 30.0f }, { seatX - 16.0f, seatY + 12.0f }, true, coat);
@@ -783,6 +788,11 @@ private:
             cairo_move_to(cr, leftEdge[0].x, leftEdge[0].y);
             for (int i = 1; i <= steps; ++i) cairo_line_to(cr, leftEdge[i].x, leftEdge[i].y);
             for (int i = steps; i >= 0; --i) cairo_line_to(cr, rightEdge[i].x, rightEdge[i].y);
+            Pt tangent=quadTangent(start,ctrl,end,0);
+            float length=std::max(0.001f,std::hypot(tangent.x,tangent.y));
+            quadCurveTo(cr,rightEdge[0].x,rightEdge[0].y,
+                start.x-tangent.x/length*startW*0.5f,start.y-tangent.y/length*startW*0.5f,
+                leftEdge[0].x,leftEdge[0].y);
             cairo_close_path(cr);
         };
 
@@ -790,7 +800,14 @@ private:
         if (coat != CatCoatTheme::Siamese) {
             traceLimb();
             setCol(cr, limbColor(coat));
-            cairo_fill(cr);
+            if (patterned(coat)) {
+                RGBA milk=pawColor(coat),base=limbColor(coat);
+                cairo_pattern_t* gradient=cairo_pattern_create_linear(start.x,start.y,end.x,end.y);
+                cairo_pattern_add_color_stop_rgb(gradient,0,milk.r,milk.g,milk.b);
+                cairo_pattern_add_color_stop_rgb(gradient,0.30,base.r,base.g,base.b);
+                cairo_pattern_set_extend(gradient,CAIRO_EXTEND_PAD);
+                cairo_set_source(cr,gradient);cairo_fill(cr);cairo_pattern_destroy(gradient);
+            } else cairo_fill(cr);
             if (patterned(coat)) {
                 int first=(int)(steps*0.72f);
                 cairo_new_path(cr);cairo_move_to(cr,leftEdge[first].x,leftEdge[first].y);
