@@ -559,7 +559,17 @@ private:
         GraphicsPath eyeClip;
         eyeClip.AddEllipse(-rx, -ry, rx * 2.0f, ry * 2.0f);
         GraphicsState cs = g.Save();
-        g.SetClip(&eyeClip);
+        g.SetClip(&eyeClip, CombineModeIntersect);
+        // Leave covered pixels untouched so the underlying face remains seamless.
+        float closure = std::clamp(physics.effectiveEyeClosure(), 0.0f, 1.0f);
+        if (closure >= 1.0f) {
+            g.Restore(cs);
+            g.Restore(st);
+            return;
+        }
+        RectF opening(-rx - 2.0f, -ry + 2.0f * ry * closure,
+                      2.0f * rx + 4.0f, 2.0f * ry * (1.0f - closure));
+        if (closure > 0.0f) g.SetClip(opening, CombineModeIntersect);
 
         SolidBrush irisBrush(eyeCol);
         g.FillRectangle(&irisBrush, -rx - 1.0f, -ry - 1.0f, rx * 2.0f + 2.0f, ry * 2.0f + 2.0f);
@@ -584,14 +594,6 @@ private:
             float gr = 2.1f + hunt * 0.9f;
             SolidBrush gb(Color(ga, 255, 255, 255));
             g.FillEllipse(&gb, px - pupilW * 0.22f - gr * 0.5f, py - pupilH * 0.22f - gr * 0.5f, gr * 2.0f, gr * 2.0f);
-        }
-
-        // Eyelid closure mask (matches black face or Siamese espresso mask!)
-        float closure = physics.effectiveEyeClosure();
-        if (closure > 0.02f) {
-            float lidH = (ry * 2.2f) * closure;
-            SolidBrush lb(coat == CatCoatTheme::Siamese ? siamesePoint() : catBlack());
-            g.FillRectangle(&lb, -rx - 2.0f, -ry - 2.0f, rx * 2.0f + 4.0f, lidH);
         }
 
         g.Restore(cs);
