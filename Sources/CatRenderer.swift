@@ -1064,9 +1064,9 @@ enum CatRenderer {
 
         ctx.saveGState()
         if coat != .siamese {
-            ctx.setFillColor(limbColor(coat).cgColor)
+            ctx.setFillColor((coat == .orangeWhite ? pawColor(coat) : limbColor(coat)).cgColor)
             ctx.addPath(limbPath)
-            if patterned(coat) {
+            if coat == .shorthair {
                 ctx.saveGState(); ctx.clip()
                 let colors = [pawColor(coat).cgColor, limbColor(coat).cgColor] as CFArray
                 if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 0.30]) {
