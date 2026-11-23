@@ -115,7 +115,14 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          apt-get update -qq
+          # Bound transient mirror/network stalls in fresh Ubuntu containers.
+          cat > /etc/apt/apt.conf.d/99-ci-network <<'APT'
+          Acquire::ForceIPv4 "true";
+          Acquire::Retries "2";
+          Acquire::http::Timeout "30";
+          Acquire::https::Timeout "30";
+          APT
+          apt-get update
           apt-get install -y -qq --no-install-recommends \
             g++ pkg-config libgtk-3-dev libcairo2-dev libx11-dev libxi-dev dpkg-dev ca-certificates git file
       - uses: actions/checkout@v4
