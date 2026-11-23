@@ -9,7 +9,7 @@ final class RenderSettings {
 }
 let output = URL(fileURLWithPath: CommandLine.arguments[1])
 try! FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
-func frame(_ coat: CatCoatTheme,_ eye:EyeColorTheme,_ state:Int,_ legacy:Bool = false,_ pose:Int = 0)->CGContext {
+func frame(_ coat: CatCoatTheme,_ eye:EyeColorTheme,_ state:Int,_ legacy:Bool = false,_ pose:Int = 0,_ occludedMuzzle:Bool = false)->CGContext {
  let p=CatPhysics()
  switch state {
  case 1: p.headYaw.value = -1; p.headPitch.value = -0.65; p.headTilt.value = -0.13
@@ -42,7 +42,7 @@ func frame(_ coat: CatCoatTheme,_ eye:EyeColorTheme,_ state:Int,_ legacy:Bool = 
  let s=RenderSettings.shared;s.coatTheme=coat;s.eyeTheme=eye
  let ctx=CGContext(data:nil,width:720,height:640,bitsPerComponent:8,bytesPerRow:720*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue)!
  ctx.translateBy(x:0,y:640);ctx.scaleBy(x:2,y:-2)
- if legacy {LegacyRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else {CurrentRenderer.draw(in:ctx,physics:p,showPermissionPill:false)}
+ if occludedMuzzle {OccludedMuzzleRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else if legacy {LegacyRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else {CurrentRenderer.draw(in:ctx,physics:p,showPermissionPill:false)}
  return ctx
 }
 func pixels(_ c:CGContext)->[UInt8] {Array(UnsafeBufferPointer(start:c.data!.assumingMemoryBound(to:UInt8.self),count:720*640*4))}
@@ -119,3 +119,18 @@ for pose in 1...8 {
  for channel in 0..<4 {precondition(abs(Int(buffer[offset+channel])-Int(ginger[channel])) <= 2,"Orange-white rear head exposed in pose \(pose)")}
 }
 print("PASS: orange-white rear head remains orange through left/right, pitch and roll poses")
+
+// Turned-down cheek intersected a body spot in v1.3.3; sample its interior, not an antialiased edge.
+swatch.setFillColor(NSColor(calibratedRed:242.0/255,green:238.0/255,blue:228.0/255,alpha:1).cgColor)
+swatch.fill(CGRect(x:0,y:0,width:1,height:1))
+let milk=Array(UnsafeBufferPointer(start:swatch.data!.assumingMemoryBound(to:UInt8.self),count:4))
+let chin=pixels(frame(.orangeWhite,.referenceHazel,2))
+let coveredChin=pixels(frame(.orangeWhite,.referenceHazel,2,false,0,true))
+var occludedChinPixels=0
+for y in 320...322 {for x in 424...426 {
+ let i=(y*720+x)*4
+ for ch in 0..<4 {precondition(abs(Int(chin[i+ch])-Int(milk[ch]))<=2,"Turned chin covered by body spot")}
+ if abs(Int(coveredChin[i+2])-Int(milk[2]))>30 {occludedChinPixels+=1}
+}}
+precondition(occludedChinPixels==9,"Muzzle fixture no longer reproduces body occlusion")
+print("PASS: turned white chin stays in front of body spots; all 9 fixture pixels previously occluded")
