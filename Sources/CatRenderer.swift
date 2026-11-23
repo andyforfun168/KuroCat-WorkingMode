@@ -590,6 +590,16 @@ enum CatRenderer {
             }
             ctx.restoreGState()
         }
+        // Body spots must not occlude the turned white cheek/chin inside the head.
+        // Keep the original spot edges below the head and the broad neck bib unchanged.
+        if coat == .orangeWhite, let muzzle = marks.last(where: { $0.head && !$0.skull && $0.width == 0 && $0.rgb == 0xF2EEE4 }) {
+            ctx.saveGState()
+            ctx.translateBy(x: head.x, y: head.y); ctx.rotate(by: physics.headTilt.value)
+            ctx.addEllipse(in: CGRect(x: -46, y: -40, width: 92, height: 80)); ctx.clip()
+            ctx.rotate(by: -physics.headTilt.value); ctx.translateBy(x: -head.x, y: -head.y)
+            ctx.setFillColor(rgb(muzzle.rgb).cgColor); ctx.addPath(markPath(muzzle)); ctx.fillPath()
+            ctx.restoreGState()
+        }
     }
 
     // MARK: - 3rd Key Hind Foot Easter Egg
@@ -1064,17 +1074,9 @@ enum CatRenderer {
 
         ctx.saveGState()
         if coat != .siamese {
-            ctx.setFillColor((coat == .orangeWhite ? pawColor(coat) : limbColor(coat)).cgColor)
+            ctx.setFillColor((patterned(coat) ? pawColor(coat) : limbColor(coat)).cgColor)
             ctx.addPath(limbPath)
-            if coat == .shorthair {
-                ctx.saveGState(); ctx.clip()
-                let colors = [pawColor(coat).cgColor, limbColor(coat).cgColor] as CFArray
-                if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 0.30]) {
-                    ctx.drawLinearGradient(gradient, start: start, end: end,
-                                           options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
-                }
-                ctx.restoreGState()
-            } else { ctx.fillPath() }
+            ctx.fillPath()
             if !patterned(coat) { ctx.fillEllipse(in: pawRect) }
             if patterned(coat) {
                 let cuff = CGMutablePath()
