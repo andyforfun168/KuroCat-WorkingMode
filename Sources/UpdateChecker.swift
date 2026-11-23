@@ -49,7 +49,7 @@ final class UpdateChecker {
         }
         checking = true
         defaults.set(Date().timeIntervalSince1970, forKey: "KuroCat.Update.LastCheck")
-        let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.3.1"
+        let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.3.2"
         var request = URLRequest(url: URL(string: "https://api.github.com/repos/\(Self.repository)/releases/latest")!)
         request.setValue("KuroCat/\(current)", forHTTPHeaderField: "User-Agent")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")

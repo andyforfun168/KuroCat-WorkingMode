@@ -549,10 +549,12 @@ enum CatRenderer {
         ctx.restoreGState()
     }
 
-    private static func coatMarkPoint(_ p: CGPoint, headSurface: Bool, seatX: CGFloat, seatY: CGFloat,
+    private static func coatMarkPoint(_ p: CGPoint, headSurface: Bool, skull: Bool, coat: CatCoatTheme, seatX: CGFloat, seatY: CGFloat,
                                       head: CGPoint, physics: CatPhysics) -> CGPoint {
         if headSurface {
-            let projected = projectHead3D(x: p.x, y: p.y, z: 27.5,
+            let depth: CGFloat = coat == .orangeWhite
+                ? 29.6 * sqrt(max(0, 1 - pow(p.x / 46, 2) - pow(p.y / 40, 2))) : 27.5
+            let projected = skull ? p : projectHead3D(x: p.x, y: p.y, z: depth,
                                           yawRad: physics.headYaw.value * 0.50,
                                           pitchRad: physics.headPitch.value * 0.36).pt
             let c = cos(physics.headTilt.value), s = sin(physics.headTilt.value)
@@ -566,12 +568,19 @@ enum CatRenderer {
     }
     private static func drawCoatMarks(in ctx: CGContext, seatX: CGFloat, seatY: CGFloat,
                                       head: CGPoint, physics: CatPhysics, coat: CatCoatTheme) {
-        for mark in CoatPatterns.marks(for: coat) {
+        let marks = CoatPatterns.marks(for: coat)
+        func markPath(_ mark: CoatMark) -> CGMutablePath {
             let path = CGMutablePath()
             for (i, point) in mark.points.enumerated() {
-                let p = coatMarkPoint(point, headSurface: mark.head, seatX: seatX, seatY: seatY, head: head, physics: physics)
+                let p = coatMarkPoint(point, headSurface: mark.head, skull: mark.skull, coat: coat, seatX: seatX, seatY: seatY, head: head, physics: physics)
                 if i == 0 { path.move(to: p) } else { path.addLine(to: p) }
             }
+            if mark.width == 0 { path.closeSubpath() }
+            return path
+        }
+        for mark in marks {
+            ctx.saveGState()
+            let path = markPath(mark)
             let color = rgb(mark.rgb, mark.alpha)
             if mark.width == 0 {
                 path.closeSubpath(); ctx.setFillColor(color.cgColor); ctx.addPath(path); ctx.fillPath()
@@ -579,6 +588,7 @@ enum CatRenderer {
                 ctx.setStrokeColor(color.cgColor); ctx.setLineWidth(mark.width)
                 ctx.setLineCap(.round); ctx.setLineJoin(.round); ctx.addPath(path); ctx.strokePath()
             }
+            ctx.restoreGState()
         }
     }
 
