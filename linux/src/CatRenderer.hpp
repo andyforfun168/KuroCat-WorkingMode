@@ -577,6 +577,14 @@ private:
         fillEllipse(cr, 0, 0, rx, ry);
         cairo_clip(cr);
 
+        // Clip the opening before drawing; never repaint the face through the oval.
+        float closure = std::clamp(physics.effectiveEyeClosure(), 0.0f, 1.0f);
+        if (closure > 0.0f) {
+            cairo_rectangle(cr, -rx - 2, -ry + 2 * ry * closure,
+                            2 * rx + 4, 2 * ry * (1 - closure));
+            cairo_clip(cr);
+        }
+
         setCol(cr, eyeCol);
         cairo_rectangle(cr, -rx - 1, -ry - 1, rx * 2 + 2, ry * 2 + 2);
         cairo_fill(cr);
@@ -600,13 +608,6 @@ private:
             double gr = 2.1 + hunt * 0.9;
             cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, ga);
             cairo_arc(cr, px - pupilW * 0.22, py - pupilH * 0.22, gr, 0, PI * 2.0);
-            cairo_fill(cr);
-        }
-
-        float closure = physics.effectiveEyeClosure();
-        if (closure > 0.02f) {
-            setCol(cr, coat == CatCoatTheme::Siamese ? siamesePoint : catBlack);
-            cairo_rectangle(cr, -rx - 2, -ry - 2, rx * 2 + 4, (ry * 2.2) * closure);
             cairo_fill(cr);
         }
 

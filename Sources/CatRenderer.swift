@@ -709,10 +709,22 @@ enum CatRenderer {
         let ry: CGFloat = 10.8 + hunt * 1.8
         let eyeRect = CGRect(x: -rx, y: -ry, width: rx * 2, height: ry * 2)
 
-        // Clip inside eye oval
+        // Clip to the visible opening before painting any iris/pupil pixels.
+        // Painting a lid over an antialiased oval leaves a colored fringe.
         ctx.saveGState()
         ctx.addEllipse(in: eyeRect)
         ctx.clip()
+
+        let closure = max(0, min(1, physics.effectiveEyeClosure))
+        if closure >= 1 {
+            ctx.restoreGState()
+            ctx.restoreGState()
+            return
+        }
+        if closure > 0 {
+            ctx.clip(to: CGRect(x: -rx - 2, y: -ry + 2 * ry * closure,
+                                width: 2 * rx + 4, height: 2 * ry * (1 - closure)))
+        }
 
         // Luminous chartreuse iris
         ctx.setFillColor(eyeColor.cgColor)
@@ -743,14 +755,6 @@ enum CatRenderer {
                 width: glintR * 2,
                 height: glintR * 2
             ))
-        }
-
-        // Eyelid closure mask (matches black face or Siamese espresso mask!)
-        let closure = physics.effectiveEyeClosure
-        if closure > 0.02 {
-            let lidHeight = (ry * 2.2) * closure
-            ctx.setFillColor((coat == .siamese ? siamesePoint : catBlack).cgColor)
-            ctx.fill(CGRect(x: -rx - 2, y: -ry - 2, width: rx * 2 + 4, height: lidHeight))
         }
 
         ctx.restoreGState()
