@@ -134,7 +134,7 @@ private:
             case EyeColorTheme::SiameseBlue:    return Gdiplus::Color(a, 94, 199, 250);
             case EyeColorTheme::WarmAmber:      return Gdiplus::Color(a, 250, 194, 56);
             case EyeColorTheme::IceCyan:        return Gdiplus::Color(a, 115, 235, 245);
-            case EyeColorTheme::ReferenceHazel: return Gdiplus::Color(a, 183, 165, 112);
+            case EyeColorTheme::ReferenceHazel: return Gdiplus::Color(a, 218, 178, 87);
             case EyeColorTheme::SoftAmber: return Gdiplus::Color(a, 217, 173, 85);
         }
         return Gdiplus::Color(a, 201, 242, 64);
@@ -641,9 +641,9 @@ private:
         // Reference iris colors, blended only in a narrow ring around the moving pupil.
         if (eyeTheme == EyeColorTheme::ReferenceHazel) {
             for (int i = 0; i <= 24; ++i) {
-                float t = i / 24.0f, mix = t*t*(3-2*t), rim = (1-t)*3.2f;
-                SolidBrush ring(Color(255, (BYTE)std::lround(183-42*mix),
-                    (BYTE)std::lround(165-20*mix), (BYTE)std::lround(112+16*mix)));
+                float t = i / 24.0f, mix = t*t*(3-2*t), rim = (1-t)*2.2f;
+                SolidBrush ring(Color(255, (BYTE)std::lround(218-77*mix),
+                    (BYTE)std::lround(178-33*mix), (BYTE)std::lround(87+41*mix)));
                 g.FillEllipse(&ring, px-pupilW*0.5f-rim, py-pupilH*0.5f-rim,
                     pupilW+2*rim, pupilH+2*rim);
             }
@@ -696,8 +696,13 @@ private:
         float lDist = std::hypot(lPos.x - CatPhysics::LeftPawRest.x, lPos.y - CatPhysics::LeftPawRest.y);
         float rDist = std::hypot(rPos.x - CatPhysics::RightPawRest.x, rPos.y - CatPhysics::RightPawRest.y);
 
-        Pt leftShoulder  = { seatX - 24.0f, seatY - 56.0f + breath };
-        Pt rightShoulder = { seatX + 24.0f, seatY - 56.0f + breath };
+        auto shoulder = [&](float x) -> Pt {
+            float sy=physics.bodySquash.value, sx=1+(1-sy)*0.55f;
+            float c=std::cos(physics.bodyTilt.value), s=std::sin(physics.bodyTilt.value);
+            float floor=126+physics.headOffsetY.value+physics.headPitch.value*4.8f+breath*1.1f+52;
+            return {seatX+x*sx*c+43*sy*s, std::max(seatY+x*sx*s-43*sy*c,floor)};
+        };
+        Pt leftShoulder=shoulder(-20), rightShoulder=shoulder(20);
 
         if (lDist < 6.0f && !physics.leftPawOnMouse && !physics.leftPawTyping) {
             drawIdleFrontLeg(g, { seatX - 18.0f, seatY - 30.0f }, { seatX - 16.0f, seatY + 12.0f }, true, coat);
@@ -768,14 +773,26 @@ private:
         for (int i = steps; i >= 0; --i) poly.push_back(rightEdge[i]);
 
         GraphicsPath limbPath;
-        limbPath.AddPolygon(poly.data(), (INT)poly.size());
+        limbPath.AddLines(poly.data(), (INT)poly.size());
+        Pt tangent=quadTangent(start,ctrl,end,0);
+        float length=std::max(0.001f,std::hypot(tangent.x,tangent.y));
+        addQuadBezier(limbPath, {rightEdge[0].X,rightEdge[0].Y},
+            {start.x-tangent.x/length*startW*0.5f,start.y-tangent.y/length*startW*0.5f},
+            {leftEdge[0].X,leftEdge[0].Y});
+        limbPath.CloseFigure();
 
         float pawR = endW * 0.58f;
         RectF pawRect(end.x - pawR, end.y - pawR * 0.85f, pawR * 2.0f, pawR * 1.7f);
 
         if (coat != CatCoatTheme::Siamese) {
             SolidBrush b(limbColor(coat));
-            g.FillPath(&b, &limbPath);
+            if (patterned(coat)) {
+                LinearGradientBrush gradient(PointF(start.x,start.y),PointF(end.x,end.y),pawColor(coat),limbColor(coat));
+                gradient.SetWrapMode(WrapModeTileFlipXY);
+                Color colors[3]={pawColor(coat),limbColor(coat),limbColor(coat)};
+                REAL positions[3]={0,0.30f,1};gradient.SetInterpolationColors(colors,positions,3);
+                g.FillPath(&gradient,&limbPath);
+            } else g.FillPath(&b, &limbPath);
             if (!patterned(coat)) g.FillEllipse(&b, pawRect);
             else {
                 std::vector<PointF> points; int first = (int)(steps*0.72f);
