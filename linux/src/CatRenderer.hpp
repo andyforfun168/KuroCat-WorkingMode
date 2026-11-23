@@ -91,9 +91,10 @@ private:
     static RGBA pawColor(CatCoatTheme c) { return patterned(c) ? rgb(0xF2EEE4) : (c == CatCoatTheme::Siamese ? siamesePoint : catBlack); }
     static RGBA earTailColor(CatCoatTheme c) { return c == CatCoatTheme::Siamese ? siamesePoint : limbColor(c); }
     static RGBA creaseColor(CatCoatTheme c) { return patterned(c) ? rgb(0x8B8171,0.60) : contourMint; }
-    static Pt coatMarkPoint(CoatPoint p, bool headSurface, float seatX, float seatY, Pt head, const CatPhysics& physics) {
+    static Pt coatMarkPoint(CoatPoint p, bool headSurface, bool skull, CatCoatTheme coat, float seatX, float seatY, Pt head, const CatPhysics& physics) {
         if (headSurface) {
-            Pt q=projectHead3D(p.x,p.y,27.5f,physics.headYaw.value*0.50f,physics.headPitch.value*0.36f);
+            float depth=coat==CatCoatTheme::OrangeWhite ? 29.6f*std::sqrt(std::max(0.0f,1-p.x*p.x/(46*46)-p.y*p.y/(40*40))) : 27.5f;
+            Pt q=skull ? Pt{p.x,p.y} : projectHead3D(p.x,p.y,depth,physics.headYaw.value*0.50f,physics.headPitch.value*0.36f);
             float c=std::cos(physics.headTilt.value),s=std::sin(physics.headTilt.value);
             return {head.x+q.x*c-q.y*s,head.y+q.x*s+q.y*c};
         }
@@ -107,7 +108,7 @@ private:
             cairo_new_path(cr);
             bool first=true;
             for (const auto& point: mark.points) {
-                Pt p=coatMarkPoint(point,mark.head,seatX,seatY,head,physics);
+                Pt p=coatMarkPoint(point,mark.head,mark.skull,coat,seatX,seatY,head,physics);
                 if (first) { cairo_move_to(cr,p.x,p.y); first=false; } else cairo_line_to(cr,p.x,p.y);
             }
             setCol(cr,rgb(mark.rgb,mark.alpha));

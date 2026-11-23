@@ -48,7 +48,7 @@ func frame(_ coat: CatCoatTheme,_ eye:EyeColorTheme,_ state:Int,_ legacy:Bool = 
 func pixels(_ c:CGContext)->[UInt8] {Array(UnsafeBufferPointer(start:c.data!.assumingMemoryBound(to:UInt8.self),count:720*640*4))}
 func save(_ c:CGContext,_ name:String){let rep=NSBitmapImageRep(cgImage:c.makeImage()!);try! rep.representation(using:.png,properties:[:])!.write(to:output.appendingPathComponent(name))}
 var n=0
-for coat in [CatCoatTheme.classicBlack,.siamese] {
+for coat in [CatCoatTheme.classicBlack,.siamese,.shorthair] {
  for eye in [EyeColorTheme.neonChartreuse,.siameseBlue,.warmAmber,.iceCyan] {
   for state in [0,1,2,4,5,6,7] {precondition(pixels(frame(coat,eye,state)) == pixels(frame(coat,eye,state,true)),"Existing skin appearance changed: \(coat), \(eye), \(state)");n+=1}
  }
@@ -103,3 +103,19 @@ print("PASS: 32 extreme turn/tilt/squash poses preserve face pixels during mouse
 precondition(EyeColorTheme.saved("淡金青绿（参考图）") == .referenceHazel)
 for eye in EyeColorTheme.allCases {precondition(EyeColorTheme.saved(eye.rawValue) == eye)}
 print("PASS: renamed hazel theme restores both old and current saved settings")
+
+let swatch=CGContext(data:nil,width:1,height:1,bitsPerComponent:8,bytesPerRow:4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue)!
+swatch.setFillColor(NSColor(calibratedRed:216.0/255,green:170.0/255,blue:115.0/255,alpha:1).cgColor)
+swatch.fill(CGRect(x:0,y:0,width:1,height:1))
+let ginger=Array(UnsafeBufferPointer(start:swatch.data!.assumingMemoryBound(to:UInt8.self),count:4))
+for pose in 1...8 {
+ let buffer=pixels(frame(.orangeWhite,.referenceHazel,9,false,pose))
+ let yaw:CGFloat=pose % 2 == 0 ? -1 : 1,tilt:CGFloat=pose % 2 == 0 ? -0.15 : 0.15
+ let pitch:CGFloat=pose % 4 < 2 ? -1 : 1,roll:CGFloat=pose % 2 == 0 ? -0.18 : 0.18
+ let cx=184+tilt*36+yaw*7.5,cy=126+14+pitch*4.8
+ let x = -yaw*38,y:CGFloat = -8
+ let px=Int((cx+x*cos(roll)-y*sin(roll))*2),py=Int((cy+x*sin(roll)+y*cos(roll))*2)
+ let offset=(py*720+px)*4
+ for channel in 0..<4 {precondition(abs(Int(buffer[offset+channel])-Int(ginger[channel])) <= 2,"Orange-white rear head exposed in pose \(pose)")}
+}
+print("PASS: orange-white rear head remains orange through left/right, pitch and roll poses")
