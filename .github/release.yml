@@ -1,0 +1,15 @@
+changelog:
+  exclude:
+    labels:
+      - duplicate
+      - invalid
+  categories:
+    - title: 功能 / Features
+      labels:
+        - enhancement
+    - title: 修复 / Fixes
+      labels:
+        - bug
+    - title: 构建、文档与维护 / Maintenance
+      labels:
+        - "*"
