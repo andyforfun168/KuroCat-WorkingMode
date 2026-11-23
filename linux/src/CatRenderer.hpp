@@ -115,6 +115,22 @@ private:
             if (mark.width==0) { cairo_close_path(cr);cairo_fill(cr); }
             else { cairo_set_line_width(cr,mark.width);cairo_set_line_cap(cr,CAIRO_LINE_CAP_ROUND);cairo_set_line_join(cr,CAIRO_LINE_JOIN_ROUND);cairo_stroke(cr); }
         }
+        // Keep the moving cheek/chin in front of body spots, only inside the head.
+        if (coat==CatCoatTheme::OrangeWhite) {
+            for (auto it=marks.rbegin();it!=marks.rend();++it) {
+                const auto& mark=*it;
+                if (!mark.head||mark.skull||mark.width!=0||mark.rgb!=0xF2EEE4) continue;
+                cairo_save(cr); cairo_translate(cr,head.x,head.y); cairo_rotate(cr,physics.headTilt.value);
+                cairo_scale(cr,46,40); cairo_arc(cr,0,0,1,0,6.28318530718); cairo_clip(cr);
+                cairo_scale(cr,1.0/46,1.0/40); cairo_rotate(cr,-physics.headTilt.value); cairo_translate(cr,-head.x,-head.y);
+                cairo_new_path(cr); bool first=true;
+                for (const auto& point:mark.points) {
+                    Pt p=coatMarkPoint(point,true,false,coat,seatX,seatY,head,physics);
+                    if (first) {cairo_move_to(cr,p.x,p.y);first=false;} else cairo_line_to(cr,p.x,p.y);
+                }
+                cairo_close_path(cr);setCol(cr,rgb(mark.rgb));cairo_fill(cr);cairo_restore(cr);break;
+            }
+        }
     }
 
     static RGBA eyePrimary(EyeColorTheme t) {
@@ -800,15 +816,8 @@ private:
         double pawR = endW * 0.58;
         if (coat != CatCoatTheme::Siamese) {
             traceLimb();
-            setCol(cr, coat == CatCoatTheme::OrangeWhite ? pawColor(coat) : limbColor(coat));
-            if (coat == CatCoatTheme::Shorthair) {
-                RGBA milk=pawColor(coat),base=limbColor(coat);
-                cairo_pattern_t* gradient=cairo_pattern_create_linear(start.x,start.y,end.x,end.y);
-                cairo_pattern_add_color_stop_rgb(gradient,0,milk.r,milk.g,milk.b);
-                cairo_pattern_add_color_stop_rgb(gradient,0.30,base.r,base.g,base.b);
-                cairo_pattern_set_extend(gradient,CAIRO_EXTEND_PAD);
-                cairo_set_source(cr,gradient);cairo_fill(cr);cairo_pattern_destroy(gradient);
-            } else cairo_fill(cr);
+            setCol(cr, patterned(coat) ? pawColor(coat) : limbColor(coat));
+            cairo_fill(cr);
             if (patterned(coat)) {
                 int first=(int)(steps*0.72f);
                 cairo_new_path(cr);cairo_move_to(cr,leftEdge[first].x,leftEdge[first].y);
