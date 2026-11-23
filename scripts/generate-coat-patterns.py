@@ -32,11 +32,8 @@ def artwork(silver):
     else:
         shape(m,False,(51,-73),[((29,-38),(23,-76),(21,-59)),((47,4),(35,-16),(20,4))],GINGER)
         ellipse(m,False,(-59,-65,28,51),GINGER)
-        # Skull-attached orange volume: its edges lie beyond the clipped cat silhouette.
-        # The curved nape stays orange when the facial markings turn away.
-        shape(m,2,(-100,-100),[
-            ((100,-100),(-30,-100),(30,-100)),((100,14),(100,-70),(100,-15)),
-            ((-100,14),(45,55),(-45,55)),((-100,-100),(-100,-15),(-100,-70))],GINGER)
+    # Head base is a rounded volume, painted after every body/neck mark.
+    ellipse(m,2,(-48,-36,96,72),0xC2C5C1 if silver else GINGER)
     col=DARK if silver else 0xA57543;alpha=.86 if silver else .48
     shape(m,True,(-13,-33),[((-9,-16),(-17,-27),(-7,-23)),((-5,-30),(-11,-22),(-3,-26)),((-13,-33),(-7,-30),(-10,-32))],col,alpha)
     shape(m,True,(0,-34),[((-2,-22),(-5,-29),(3,-25)),((1,-12),(-5,-18),(0,-15)),((5,-24),(5,-18),(7,-20)),((2,-34),(2,-29),(6,-31))],col,alpha)
@@ -49,18 +46,19 @@ def artwork(silver):
         top=-16; hw=6
         shape(m,True,(-hw,top),[
             ((-9,7),(-6,top+(5)),(-6,0)),
-            ((-30,18),(-15,13),(-24,14)),((-18,34),(-32,27),(-24,33)),
-            ((18,34),(-8,35),(8,35)),((30,18),(24,33),(32,27)),((9,7),(24,14),(15,13)),
+            ((-30,18),(-15,13),(-24,14)),((0,35),(-30,28),(-14,35)),
+            ((30,18),(14,35),(30,28)),((9,7),(24,14),(15,13)),
             ((hw,top),(6,0),(6,top+(5)))],MILK)
-    else:
-        # The white muzzle becomes a rounded bib extending into the white chest.
+    if not silver:
+        # The torso is already white. Add only the actual opaque rounded muzzle
+        # above all body/head marks; never clip the chin with another oval.
         shape(m,True,(0,-24),[
             ((-9,7),(-5,-16),(-4,0)),((-29,20),(-15,13),(-25,14)),
-            ((-33,30),(-34,23),(-32,26)),((-70,48),(-37,35),(-58,38)),
-            ((70,48),(-30,70),(30,70)),((33,30),(58,38),(37,35)),
-            ((29,20),(32,26),(34,23)),((9,7),(25,14),(15,13)),
+            ((0,35),(-30,29),(-14,35)),((29,20),(14,35),(30,29)),((9,7),(25,14),(15,13)),
             ((0,-24),(4,0),(5,-16))],MILK)
-    return m if silver else [mark for mark in m if mark[0]] + [mark for mark in m if not mark[0]]
+    # Back-to-front: all body markings, rounded head base, head patterns,
+    # opaque cheek/chin. Eyes and whiskers are drawn afterward.
+    return sorted(m,key=lambda mark: 0 if not mark[0] else (1 if mark[0]==2 else 2))
 
 def n(v):
     s=f'{v:.5f}'.rstrip('0').rstrip('.')
