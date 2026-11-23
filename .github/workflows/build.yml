@@ -142,17 +142,34 @@ jobs:
       RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v{0}', inputs.release_version) }}
     steps:
       - uses: actions/checkout@v4
+      - name: Preserve an existing published release
+        id: release-state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh api --paginate "repos/$GH_REPO/releases" \
+            --jq '.[] | select(.draft == false) | .tag_name' > published-tags.txt
+          if grep -Fxq -- "$RELEASE_TAG" published-tags.txt; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "Release already published; preserving its notes and assets."
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/download-artifact@v4
+        if: steps.release-state.outputs.published != 'true'
         with:
           path: dist
           merge-multiple: true
       - name: Validate release assets and generate checksums
+        if: steps.release-state.outputs.published != 'true'
         run: |
           mv dist/KuroCat.exe dist/KuroCat-Windows-x64.exe
           bash scripts/verify-release.sh dist
           test -s "docs/releases/${RELEASE_TAG}.md"
           cp LICENSE dist/LICENSE.txt
       - name: Prepare complete draft release
+        if: steps.release-state.outputs.published != 'true'
         uses: softprops/action-gh-release@v2
         with:
           name: KuroCat ${{ env.RELEASE_TAG }} · macOS / Windows / Linux
