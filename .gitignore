@@ -11,3 +11,11 @@ linux/*.tar.gz
 preview.png
 preview_siamese.png
 *.log
+
+# Release packaging and local build/cache outputs
+/dist/
+/build/
+/.build/
+/.swift-module-cache/
+/KuroCat-macOS-*.zip
+__pycache__/
