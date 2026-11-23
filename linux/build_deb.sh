@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-VERSION="${1:-1.2.0}"
+VERSION="${1:-1.3.0}"
 if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "Expected a numeric release version such as 1.2.0" >&2
+    echo "Expected a numeric release version such as 1.3.0" >&2
     exit 1
 fi
 ARCH="$(dpkg --print-architecture)"
