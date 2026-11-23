@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(KuroCat LANGUAGES CXX)
+find_package(Threads REQUIRED)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -16,4 +17,4 @@ else()
     target_compile_options(KuroCat PRIVATE -O2 -municode)
 endif()
 
-target_link_libraries(KuroCat PRIVATE user32 gdi32 gdiplus shell32 advapi32)
+target_link_libraries(KuroCat PRIVATE user32 gdi32 gdiplus shell32 advapi32 winhttp Threads::Threads)
