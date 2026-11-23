@@ -4,7 +4,7 @@
 #include <regex>
 #include <string>
 namespace KuroUpdate {
-inline constexpr char CurrentVersion[] = "1.3.4";
+inline constexpr char CurrentVersion[] = "1.3.5";
 inline constexpr char Repository[] = "andyforfun168/KuroCatAndy";
 inline constexpr char ReleasePage[] = "https://github.com/andyforfun168/KuroCatAndy/releases/latest";
 inline std::optional<std::array<int,3>> version(std::string text) {

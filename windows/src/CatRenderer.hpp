@@ -105,9 +105,11 @@ private:
     static Gdiplus::Color pawColor(CatCoatTheme c) { return patterned(c) ? rgb(0xF2EEE4) : (c == CatCoatTheme::Siamese ? siamesePoint() : catBlack()); }
     static Gdiplus::Color earTailColor(CatCoatTheme c) { return c == CatCoatTheme::Siamese ? siamesePoint() : limbColor(c); }
     static Gdiplus::Color creaseColor(CatCoatTheme c, BYTE a = 255) { return patterned(c) ? rgb(0x8B8171, (BYTE)(a*0.60f)) : contourMint(a); }
-    static Gdiplus::PointF coatMarkPoint(CoatPoint p, bool headSurface, bool skull, CatCoatTheme coat, float seatX, float seatY, Pt head, const CatPhysics& physics) {
+    static Gdiplus::PointF coatMarkPoint(CoatPoint p, bool headSurface, bool skull, CatCoatTheme coat, float seatX, float seatY, Pt head, const CatPhysics& physics, bool whiteSurface=false) {
         if (headSurface) {
-            float depth=coat==CatCoatTheme::OrangeWhite ? 29.6f*std::sqrt(std::max(0.0f,1-p.x*p.x/(46*46)-p.y*p.y/(40*40))) : 27.5f;
+            float radius=std::max(0.0f,1-p.x*p.x/(46*46)-p.y*p.y/(40*40));
+            float surface=whiteSurface ? radius*radius*(3-2*radius) : std::sqrt(radius);
+            float depth=coat==CatCoatTheme::OrangeWhite ? 29.6f*surface : 27.5f;
             Pt q=skull ? Pt{p.x,p.y} : projectHead3D(p.x,p.y,depth,physics.headYaw.value*0.50f,physics.headPitch.value*0.36f);
             float c = std::cos(physics.headTilt.value), s = std::sin(physics.headTilt.value);
             return {head.x + q.x*c - q.y*s, head.y + q.x*s + q.y*c};
@@ -119,29 +121,37 @@ private:
     static void drawCoatMarks(Gdiplus::Graphics& g, float seatX, float seatY, Pt head, const CatPhysics& physics, CatCoatTheme coat) {
         using namespace Gdiplus;
         const auto& marks = coat == CatCoatTheme::Shorthair ? shorthairMarks() : orangeWhiteMarks();
+        const CoatMark* bib=nullptr;
+        for (const auto& mark:marks) if (mark.head && !mark.skull && mark.rgb==0xF2EEE4) {
+            for (const auto& p:mark.points) if (std::abs(p.x)>46) {bib=&mark;break;}
+            if (bib) break;
+        }
+        float overlap=std::min(1.0f,std::abs(physics.headYaw.value)*std::max(0.0f,physics.headPitch.value));
+        float coverage=overlap*overlap*(3-2*overlap);
         for (const auto& mark : marks) {
+            if (mark.clipToBib && coverage==0) continue;
+            GraphicsState saved=g.Save();
+            if (mark.clipToBib && bib) {
+                std::vector<PointF> clipPoints;
+                for (const auto& p:bib->points) clipPoints.push_back(coatMarkPoint(p,true,false,coat,seatX,seatY,head,physics,true));
+                GraphicsPath clip;clip.AddPolygon(clipPoints.data(),(INT)clipPoints.size());g.SetClip(&clip,CombineModeIntersect);
+            }
             std::vector<PointF> points;
-            for (const auto& p : mark.points) points.push_back(coatMarkPoint(p, mark.head, mark.skull, coat, seatX, seatY, head, physics));
+            for (auto p : mark.points) {
+                if (mark.clipToBib) {
+                    float rim=std::min(1.0f,std::max(0.0f,(p.y-20)/6));
+                    p.x*=1-0.5f*rim*(1-coverage);
+                    if (p.y>20) p.y=20+(p.y-20)*(0.75f+0.25f*coverage);
+                }
+                points.push_back(coatMarkPoint(p, mark.head, mark.skull, coat, seatX, seatY, head, physics, mark.rgb==0xF2EEE4));
+            }
             GraphicsPath path;
             Color color = rgb(mark.rgb, (BYTE)(mark.alpha*255));
             if (mark.width == 0) { path.AddPolygon(points.data(), (INT)points.size()); SolidBrush brush(color); g.FillPath(&brush, &path); }
             else { path.AddLines(points.data(), (INT)points.size()); Pen pen(color, mark.width); pen.SetStartCap(LineCapRound); pen.SetEndCap(LineCapRound); pen.SetLineJoin(LineJoinRound); g.DrawPath(&pen, &path); }
+            g.Restore(saved);
         }
-        // Keep the moving cheek/chin in front of body spots, only inside the head.
-        if (coat == CatCoatTheme::OrangeWhite) {
-            for (auto it=marks.rbegin(); it!=marks.rend(); ++it) {
-                const auto& mark=*it;
-                if (!mark.head || mark.skull || mark.width!=0 || mark.rgb!=0xF2EEE4) continue;
-                GraphicsState saved=g.Save();
-                GraphicsPath oval; oval.AddEllipse(-46.0f,-40.0f,92.0f,80.0f);
-                Matrix transform; transform.Translate(head.x,head.y); transform.Rotate(physics.headTilt.value*180.0f/3.14159265f);
-                oval.Transform(&transform); g.SetClip(&oval,CombineModeIntersect);
-                std::vector<PointF> points;
-                for (const auto& p:mark.points) points.push_back(coatMarkPoint(p,true,false,coat,seatX,seatY,head,physics));
-                GraphicsPath face; face.AddPolygon(points.data(),(INT)points.size());
-                SolidBrush brush(rgb(mark.rgb)); g.FillPath(&brush,&face); g.Restore(saved); break;
-            }
-        }
+
     }
 
     static Gdiplus::Color eyePrimary(EyeColorTheme t, BYTE a = 255) {
@@ -490,6 +500,12 @@ private:
         if (coat != CatCoatTheme::Siamese) {
             SolidBrush b(bodyColor(coat));
             g.FillPath(&b, &path);
+            if (coat==CatCoatTheme::OrangeWhite) {
+                GraphicsPath join;
+                join.AddBezier(lCheek,H(leftCheekX-1.5f,-14.0f),H(-26.0f+cheekShift*0.3f,-30.0f+crownDrop),crown);
+                join.AddBezier(crown,H(26.0f+cheekShift*0.3f,-30.0f+crownDrop),H(rightCheekX+1.5f,-14.0f),rCheek);
+                Pen fur(earTailColor(coat),1.0f);fur.SetStartCap(LineCapRound);fur.SetEndCap(LineCapRound);g.DrawPath(&fur,&join);
+            }
             if (patterned(coat)) {
                 GraphicsState cs = g.Save(); g.SetClip(&path, CombineModeIntersect);
                 drawCoatMarks(g, seatX, seatY, headCenter, physics, coat); g.Restore(cs);
