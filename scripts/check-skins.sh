@@ -11,7 +11,7 @@ import subprocess,sys
 root,out=map(Path,sys.argv[1:])
 p=(root/'Sources/CatPhysics.swift').read_text().replace('private(set) ','')
 (out/'CatPhysics.swift').write_text(p)
-for name,source in [('LegacyRenderer',subprocess.check_output(['git','-C',str(root),'show','v1.2.1:Sources/CatRenderer.swift'],text=True)),('CurrentRenderer',(root/'Sources/CatRenderer.swift').read_text())]:
+for name,source in [('LegacyRenderer',subprocess.check_output(['git','-C',str(root),'show','60a34c90c22fccae649b3b60ec0dbb79b3a5b725:Sources/CatRenderer.swift'],text=True)),('CurrentRenderer',(root/'Sources/CatRenderer.swift').read_text())]:
  source=source.replace('enum CatRenderer {','enum '+name+' {').replace('CatSettings.shared','RenderSettings.shared')
  if name=='LegacyRenderer':source=source.replace('CatHitZone','LegacyCatHitZone')
  (out/(name+'.swift')).write_text(source)
