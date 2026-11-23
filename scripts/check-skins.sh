@@ -21,6 +21,7 @@ for name,revision in [('OccludedMuzzleRenderer','be3185d'),('PointyChinRenderer'
  (out/(name+'Patterns.swift')).write_text(patterns)
 for name,source in sources:
  source=source.replace('enum CatRenderer {','enum '+name+' {').replace('CatSettings.shared','RenderSettings.shared')
+ source=source.replace('private static func coatMarkPoint','static func coatMarkPoint')
  if name!='CurrentRenderer':source=source.replace('CatHitZone',name+'CatHitZone')
  (out/(name+'.swift')).write_text(source)
 PY
