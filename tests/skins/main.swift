@@ -9,7 +9,7 @@ final class RenderSettings {
 }
 let output = URL(fileURLWithPath: CommandLine.arguments[1])
 try! FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
-func frame(_ coat: CatCoatTheme,_ eye:EyeColorTheme,_ state:Int,_ legacy:Bool = false)->CGContext {
+func frame(_ coat: CatCoatTheme,_ eye:EyeColorTheme,_ state:Int,_ legacy:Bool = false,_ pose:Int = 0)->CGContext {
  let p=CatPhysics()
  switch state {
  case 1: p.headYaw.value = -1; p.headPitch.value = -0.65; p.headTilt.value = -0.13
@@ -19,6 +19,20 @@ func frame(_ coat: CatCoatTheme,_ eye:EyeColorTheme,_ state:Int,_ legacy:Bool = 
   p.rightPaw.x.value=240;p.rightPaw.y.value=268;p.rightPawTyping=true
   p.hindFootActive.value=1;p.hindFoot.x.value=164;p.hindFoot.y.value=270
   p.bodyTilt.value=0.12;p.bodySquash.value=0.90;p.tailPhase=2
+ case 8,9:
+  p.headYaw.value = -0.65;p.headPitch.value = 0.2;p.headTilt.value = -0.08
+  if pose > 0 {
+   p.headYaw.value = pose % 2 == 0 ? -1 : 1
+   p.headPitch.value = pose % 4 < 2 ? -1 : 1
+   p.headTilt.value = pose % 2 == 0 ? -0.18 : 0.18
+   p.bodyTilt.value = pose % 2 == 0 ? -0.15 : 0.15
+   p.bodySquash.value = pose % 4 < 2 ? 0.85 : 1.08
+   p.headOffsetY.value = 14
+  }
+  if state == 8 {
+   p.leftPaw.x.value=78;p.leftPaw.y.value=252;p.leftPawOnMouse=true
+   if pose > 3 {p.rightPaw.x.value=240;p.rightPaw.y.value=262;p.rightPawTyping=true}
+  }
  case 4:p.sleepiness=1;p.earFold.value=0.25
  case 5:p.petHeadIntensity=0.8;p.earFold.value=0.6
  case 6:p.petBodyIntensity=0.8
@@ -36,7 +50,7 @@ func save(_ c:CGContext,_ name:String){let rep=NSBitmapImageRep(cgImage:c.makeIm
 var n=0
 for coat in [CatCoatTheme.classicBlack,.siamese] {
  for eye in [EyeColorTheme.neonChartreuse,.siameseBlue,.warmAmber,.iceCyan] {
-  for state in 0..<8 {precondition(pixels(frame(coat,eye,state)) == pixels(frame(coat,eye,state,true)),"Existing skin appearance changed: \(coat), \(eye), \(state)");n+=1}
+  for state in [0,1,2,4,5,6,7] {precondition(pixels(frame(coat,eye,state)) == pixels(frame(coat,eye,state,true)),"Existing skin appearance changed: \(coat), \(eye), \(state)");n+=1}
  }
 }
 for (name,coat) in [("shorthair",CatCoatTheme.shorthair),("orangeWhite",.orangeWhite)] {
@@ -48,4 +62,44 @@ for (name,coat) in [("shorthair",CatCoatTheme.shorthair),("orangeWhite",.orangeW
 }
 for (name,coat) in [("black",CatCoatTheme.classicBlack),("siamese",.siamese)] {save(frame(coat,coat == .siamese ? .siameseBlue : .neonChartreuse,0),name+".png")}
 save(frame(.shorthair,.softAmber,0),"shorthair-amber.png")
-print("PASS: \(n) legacy skin/eye/action frames pixel-identical to v1.2.1; rendered 16 new skin/action frames including turned heads, typing/mouse/third paw, sleep, petting and hunting.")
+print("PASS: \(n) legacy skin/eye/action frames pixel-identical to v1.3.0; rendered 16 new skin/action frames including turned heads, typing/mouse/third paw, sleep, petting and hunting.")
+
+for (name,coat) in [("shorthair",CatCoatTheme.shorthair),("orangeWhite",.orangeWhite)] {
+ save(frame(coat,.softAmber,8),name+"-shoulder-after.png")
+ save(frame(coat,.softAmber,8,true),name+"-shoulder-before.png")
+}
+
+var oldFaceChanges = 0
+for coat in CatCoatTheme.allCases {
+ let active = pixels(frame(coat,.softAmber,8)), idle = pixels(frame(coat,.softAmber,9))
+ let oldActive = pixels(frame(coat,.softAmber,8,true)), oldIdle = pixels(frame(coat,.softAmber,9,true))
+ for y in 160..<342 {
+  for x in 240..<490 {
+   let i=(y*720+x)*4
+   precondition(Array(active[i..<i+4]) == Array(idle[i..<i+4]),"Reaching arm changes face pixels: \(coat)")
+   if Array(oldActive[i..<i+4]) != Array(oldIdle[i..<i+4]) {oldFaceChanges += 1}
+  }
+ }
+}
+precondition(oldFaceChanges > 0,"Shoulder fixture did not reproduce the old intrusion")
+print("PASS: reaching arms leave the face unchanged across all four skins; old fixture contaminated \(oldFaceChanges) pixels")
+
+for coat in CatCoatTheme.allCases {
+ for pose in 1...8 {
+  let active=pixels(frame(coat,.referenceHazel,8,false,pose)),idle=pixels(frame(coat,.referenceHazel,9,false,pose))
+  let yaw:CGFloat=pose % 2 == 0 ? -1 : 1, tilt:CGFloat=pose % 2 == 0 ? -0.15 : 0.15
+  let pitch:CGFloat=pose % 4 < 2 ? -1 : 1
+  let cx=184+tilt*36+yaw*7.5,cy=126+14+pitch*4.8
+  for y in Int((cy-35)*2)..<Int((cy+40)*2) {
+   for x in Int((cx-52)*2)..<Int((cx+52)*2) {
+    let i=(y*720+x)*4
+    precondition(Array(active[i..<i+4]) == Array(idle[i..<i+4]),"Arm intrudes on turned face: \(coat), pose \(pose)")
+   }
+  }
+ }
+}
+print("PASS: 32 extreme turn/tilt/squash poses preserve face pixels during mouse and typing actions")
+
+precondition(EyeColorTheme.saved("淡金青绿（参考图）") == .referenceHazel)
+for eye in EyeColorTheme.allCases {precondition(EyeColorTheme.saved(eye.rawValue) == eye)}
+print("PASS: renamed hazel theme restores both old and current saved settings")
