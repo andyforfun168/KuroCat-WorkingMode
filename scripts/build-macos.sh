@@ -48,10 +48,10 @@ def make_icon(size):
     d.ellipse([104*s, 152*s, 408*s, 398*s], fill=black)
     d.rounded_rectangle([140*s, 310*s, 372*s, 484*s], radius=int(72*s), fill=black)
 
-    # Signature chartreuse eyes
-    lime = (202, 242, 64, 255)
-    d.ellipse([160*s, 232*s, 238*s, 298*s], fill=lime)
-    d.ellipse([274*s, 232*s, 352*s, 298*s], fill=lime)
+    # Orange eyes distinguish this fork from upstream
+    orange = (255, 153, 35, 255)
+    d.ellipse([160*s, 232*s, 238*s, 298*s], fill=orange)
+    d.ellipse([274*s, 232*s, 352*s, 298*s], fill=orange)
 
     # Vertical dark pupils
     d.ellipse([190*s, 244*s, 212*s, 286*s], fill=black)
