@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 下载与安装 / Downloads
+    url: https://github.com/andyforfun168/KuroCatAndy/releases/latest
+    about: 先查看平台下载表、系统要求和首次运行说明。
+  - name: 安装与排障 / Troubleshooting
+    url: https://github.com/andyforfun168/KuroCatAndy/blob/main/docs/DOWNLOADS.md
+    about: 下载校验、macOS 权限、Linux 依赖及常见问题。

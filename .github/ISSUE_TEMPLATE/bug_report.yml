@@ -1,0 +1,25 @@
+name: 使用问题 / Bug report
+description: 报告下载、启动、权限或桌宠交互问题。
+title: "[Bug] "
+body:
+  - type: input
+    id: version
+    attributes:
+      label: 版本与下载文件
+      description: 例如 v1.2.0 / KuroCat-macOS-universal.zip；源码编译请提供 commit。
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 系统与架构
+      description: 系统版本、CPU 架构；Linux 请注明 X11/Wayland、发行版和 glibc 版本。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤、实际结果与预期结果
+      description: 请附错误原文或截图；不要上传键盘输入内容、密码或其他私人信息。
+    validations:
+      required: true
