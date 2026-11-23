@@ -1064,17 +1064,9 @@ enum CatRenderer {
 
         ctx.saveGState()
         if coat != .siamese {
-            ctx.setFillColor((coat == .orangeWhite ? pawColor(coat) : limbColor(coat)).cgColor)
+            ctx.setFillColor((patterned(coat) ? pawColor(coat) : limbColor(coat)).cgColor)
             ctx.addPath(limbPath)
-            if coat == .shorthair {
-                ctx.saveGState(); ctx.clip()
-                let colors = [pawColor(coat).cgColor, limbColor(coat).cgColor] as CFArray
-                if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 0.30]) {
-                    ctx.drawLinearGradient(gradient, start: start, end: end,
-                                           options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
-                }
-                ctx.restoreGState()
-            } else { ctx.fillPath() }
+            ctx.fillPath()
             if !patterned(coat) { ctx.fillEllipse(in: pawRect) }
             if patterned(coat) {
                 let cuff = CGMutablePath()
