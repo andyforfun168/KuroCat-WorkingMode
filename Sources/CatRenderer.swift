@@ -590,6 +590,16 @@ enum CatRenderer {
             }
             ctx.restoreGState()
         }
+        // Body spots must not occlude the turned white cheek/chin inside the head.
+        // Keep the original spot edges below the head and the broad neck bib unchanged.
+        if coat == .orangeWhite, let muzzle = marks.last(where: { $0.head && !$0.skull && $0.width == 0 && $0.rgb == 0xF2EEE4 }) {
+            ctx.saveGState()
+            ctx.translateBy(x: head.x, y: head.y); ctx.rotate(by: physics.headTilt.value)
+            ctx.addEllipse(in: CGRect(x: -46, y: -40, width: 92, height: 80)); ctx.clip()
+            ctx.rotate(by: -physics.headTilt.value); ctx.translateBy(x: -head.x, y: -head.y)
+            ctx.setFillColor(rgb(muzzle.rgb).cgColor); ctx.addPath(markPath(muzzle)); ctx.fillPath()
+            ctx.restoreGState()
+        }
     }
 
     // MARK: - 3rd Key Hind Foot Easter Egg
