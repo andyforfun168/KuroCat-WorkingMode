@@ -9,7 +9,7 @@ final class RenderSettings {
 }
 let output = URL(fileURLWithPath: CommandLine.arguments[1])
 try! FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
-func frame(_ coat: CatCoatTheme,_ eye:EyeColorTheme,_ state:Int,_ legacy:Bool = false,_ pose:Int = 0,_ occludedMuzzle:Bool = false)->CGContext {
+func frame(_ coat: CatCoatTheme,_ eye:EyeColorTheme,_ state:Int,_ legacy:Bool = false,_ pose:Int = 0,_ occludedMuzzle:Bool = false,_ pointyChin:Bool = false)->CGContext {
  let p=CatPhysics()
  switch state {
  case 1: p.headYaw.value = -1; p.headPitch.value = -0.65; p.headTilt.value = -0.13
@@ -42,13 +42,13 @@ func frame(_ coat: CatCoatTheme,_ eye:EyeColorTheme,_ state:Int,_ legacy:Bool = 
  let s=RenderSettings.shared;s.coatTheme=coat;s.eyeTheme=eye
  let ctx=CGContext(data:nil,width:720,height:640,bitsPerComponent:8,bytesPerRow:720*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue)!
  ctx.translateBy(x:0,y:640);ctx.scaleBy(x:2,y:-2)
- if occludedMuzzle {OccludedMuzzleRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else if legacy {LegacyRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else {CurrentRenderer.draw(in:ctx,physics:p,showPermissionPill:false)}
+ if pointyChin {PointyChinRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else if occludedMuzzle {OccludedMuzzleRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else if legacy {LegacyRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else {CurrentRenderer.draw(in:ctx,physics:p,showPermissionPill:false)}
  return ctx
 }
 func pixels(_ c:CGContext)->[UInt8] {Array(UnsafeBufferPointer(start:c.data!.assumingMemoryBound(to:UInt8.self),count:720*640*4))}
 func save(_ c:CGContext,_ name:String){let rep=NSBitmapImageRep(cgImage:c.makeImage()!);try! rep.representation(using:.png,properties:[:])!.write(to:output.appendingPathComponent(name))}
 var n=0
-for coat in [CatCoatTheme.classicBlack,.siamese,.shorthair] {
+for coat in [CatCoatTheme.classicBlack,.siamese] {
  for eye in [EyeColorTheme.neonChartreuse,.siameseBlue,.warmAmber,.iceCyan] {
   for state in [0,1,2,4,5,6,7] {precondition(pixels(frame(coat,eye,state)) == pixels(frame(coat,eye,state,true)),"Existing skin appearance changed: \(coat), \(eye), \(state)");n+=1}
  }
@@ -134,3 +134,40 @@ for y in 320...322 {for x in 424...426 {
 }}
 precondition(occludedChinPixels==9,"Muzzle fixture no longer reproduces body occlusion")
 print("PASS: turned white chin stays in front of body spots; all 9 fixture pixels previously occluded")
+
+let oldPoint=pixels(frame(.orangeWhite,.referenceHazel,2,false,0,false,true))
+for (x,y) in [(434,314),(435,314),(436,314),(434,315),(435,315)] {
+ let i=(y*720+x)*4
+ for ch in 0..<4 {precondition(abs(Int(chin[i+ch])-Int(milk[ch]))<=2,"Orange tip leaks through opaque white chin")}
+ precondition(abs(Int(oldPoint[i+2])-Int(milk[2]))>30,"Pointy chin fixture failed to reproduce orange tip")
+}
+print("PASS: all 5 formerly orange chin-tip pixels are now opaque white")
+
+for coat in [CatCoatTheme.shorthair,.orangeWhite] {
+ let marks=CoatPatterns.marks(for:coat)
+ let firstHead=marks.firstIndex(where:{$0.head})!
+ precondition(marks[firstHead...].allSatisfy{$0.head},"Body element painted above head")
+ let face=marks.last!
+ precondition(face.head && !face.skull && face.rgb==0xF2EEE4 && face.alpha==1 && face.width==0,"Cheek/chin must be the opaque foreground coat layer")
+}
+func cheekPath(_ points:[CGPoint])->CGPath {
+ let p=CGMutablePath();p.addLines(between:points);p.closeSubpath();return p
+}
+let roundedCheek=cheekPath(CoatPatterns.shorthair.last!.points)
+let flatCheek=cheekPath(PointyChinRendererPatterns.shorthair.last!.points)
+precondition(roundedCheek.contains(CGPoint(x:0,y:34)),"Rounded chin lost its central arc")
+precondition(!roundedCheek.contains(CGPoint(x:14,y:34)),"Shorthair lower chin still has a flat wide edge")
+precondition(flatCheek.contains(CGPoint(x:14,y:34)),"Fixture did not reproduce the old wide flat chin")
+print("PASS: all body marks behind head; opaque foreground cheeks; smaller rounded shorthair chin replaces flat fixture")
+for coat in [CatCoatTheme.shorthair,.orangeWhite] {
+ let now=CoatPatterns.marks(for:coat)
+ let old=PointyChinRendererPatterns.marks(for:coat)
+ let body=now.filter{!$0.head},oldBody=old.filter{!$0.head}
+ precondition(body.count==oldBody.count)
+ for (a,b) in zip(body,oldBody) {precondition(a.points==b.points && a.rgb==b.rgb && a.width==b.width && a.alpha==b.alpha,"Original body coat artwork changed")}
+ let patterns=now.filter{$0.head && !$0.skull && $0.rgb != 0xF2EEE4}
+ let oldPatterns=old.filter{$0.head && !$0.skull && $0.rgb != 0xF2EEE4}
+ precondition(patterns.count==oldPatterns.count)
+ for (a,b) in zip(patterns,oldPatterns) {precondition(a.points==b.points && a.rgb==b.rgb && a.width==b.width && a.alpha==b.alpha,"Original head pattern changed")}
+}
+print("PASS: original body spots, tabby stripes and forehead pattern geometry preserved")
