@@ -800,8 +800,8 @@ private:
         double pawR = endW * 0.58;
         if (coat != CatCoatTheme::Siamese) {
             traceLimb();
-            setCol(cr, limbColor(coat));
-            if (patterned(coat)) {
+            setCol(cr, coat == CatCoatTheme::OrangeWhite ? pawColor(coat) : limbColor(coat));
+            if (coat == CatCoatTheme::Shorthair) {
                 RGBA milk=pawColor(coat),base=limbColor(coat);
                 cairo_pattern_t* gradient=cairo_pattern_create_linear(start.x,start.y,end.x,end.y);
                 cairo_pattern_add_color_stop_rgb(gradient,0,milk.r,milk.g,milk.b);
