@@ -818,15 +818,15 @@ enum CatRenderer {
         let pupilW = normalW + (huntDiameter - normalW) * hunt
         let pupilH = normalH + (huntDiameter - normalH) * hunt
         let pupilRect = CGRect(x: px - pupilW * 0.5, y: py - pupilH * 0.5, width: pupilW, height: pupilH)
-        // Photo-sampled hazel: #B7A570 outside, a narrow #8D9180 ring by the pupil.
+        // Photo-sampled hazel: #DAB257 outside, a narrow #8D9180 ring by the pupil.
         // Paint inside the existing lid clip and follow the animated pupil position/size.
         if eyeTheme == .referenceHazel {
             for i in 0...24 {
                 let t = CGFloat(i) / 24
                 let mix = t * t * (3 - 2 * t)
-                ctx.setFillColor(NSColor(calibratedRed: (183 - 42 * mix)/255,
-                    green: (165 - 20 * mix)/255, blue: (112 + 16 * mix)/255, alpha: 1).cgColor)
-                let rim = (1 - t) * 3.2
+                ctx.setFillColor(NSColor(calibratedRed: (218 - 77 * mix)/255,
+                    green: (178 - 33 * mix)/255, blue: (87 + 41 * mix)/255, alpha: 1).cgColor)
+                let rim = (1 - t) * 2.2
                 ctx.fillEllipse(in: pupilRect.insetBy(dx: -rim, dy: -rim))
             }
         }
@@ -900,8 +900,16 @@ enum CatRenderer {
         let lDist = hypot(lPos.x - CatPhysics.leftPawRest.x, lPos.y - CatPhysics.leftPawRest.y)
         let rDist = hypot(rPos.x - CatPhysics.rightPawRest.x, rPos.y - CatPhysics.rightPawRest.y)
 
-        let leftShoulder = CGPoint(x: seatX - 24, y: seatY - 56 + breath)
-        let rightShoulder = CGPoint(x: seatX + 24, y: seatY - 56 + breath)
+        // Attach to the transformed chest, below the moving face rather than its white blaze.
+        func shoulder(_ x: CGFloat) -> CGPoint {
+            let sy = physics.bodySquash.value, sx = 1 + (1 - sy) * 0.55
+            let c = cos(physics.bodyTilt.value), s = sin(physics.bodyTilt.value)
+            let faceBottom = 126 + physics.headOffsetY.value + physics.headPitch.value * 4.8 + breath * 1.1 + 52
+            return CGPoint(x: seatX + x*sx*c + 43*sy*s,
+                           y: max(seatY + x*sx*s - 43*sy*c, faceBottom))
+        }
+        let leftShoulder = shoulder(-20)
+        let rightShoulder = shoulder(20)
 
         // Left arm
         if lDist < 6.0 && !physics.leftPawOnMouse && !physics.leftPawTyping {
@@ -1034,6 +1042,11 @@ enum CatRenderer {
         limbPath.move(to: leftEdge[0])
         for pt in leftEdge.dropFirst() { limbPath.addLine(to: pt) }
         for pt in rightEdge.reversed() { limbPath.addLine(to: pt) }
+        let tangent = quadTangent(start, control, end, t: 0)
+        let length = max(0.001, hypot(tangent.x, tangent.y))
+        limbPath.addQuadCurve(to: leftEdge[0], control: CGPoint(
+            x: start.x - tangent.x/length*startWidth*0.5,
+            y: start.y - tangent.y/length*startWidth*0.5))
         limbPath.closeSubpath()
 
         let pawR = endWidth * 0.58
@@ -1043,7 +1056,15 @@ enum CatRenderer {
         if coat != .siamese {
             ctx.setFillColor(limbColor(coat).cgColor)
             ctx.addPath(limbPath)
-            ctx.fillPath()
+            if patterned(coat) {
+                ctx.saveGState(); ctx.clip()
+                let colors = [pawColor(coat).cgColor, limbColor(coat).cgColor] as CFArray
+                if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 0.30]) {
+                    ctx.drawLinearGradient(gradient, start: start, end: end,
+                                           options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+                }
+                ctx.restoreGState()
+            } else { ctx.fillPath() }
             if !patterned(coat) { ctx.fillEllipse(in: pawRect) }
             if patterned(coat) {
                 let cuff = CGMutablePath()

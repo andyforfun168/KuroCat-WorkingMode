@@ -44,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             _ = setAutoStartEnabled(true)
         }
         startRenderLoop()
+        UpdateChecker.shared.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -233,12 +234,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        let checkUpdate = NSMenuItem(title: "检查更新…", action: #selector(checkForUpdates), keyEquivalent: "")
+        checkUpdate.target = self
+        menu.addItem(checkUpdate)
+        let autoUpdate = NSMenuItem(title: "自动检查更新（每天一次）", action: #selector(toggleUpdateChecks), keyEquivalent: "")
+        autoUpdate.target = self
+        autoUpdate.state = UpdateChecker.shared.automatic ? .on : .off
+        menu.addItem(autoUpdate)
+        menu.addItem(.separator())
+
         let quitItem = NSMenuItem(title: "退出 KuroCat", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
         return menu
     }
+
+    @objc private func checkForUpdates() { UpdateChecker.shared.check(manual: true) }
+    @objc private func toggleUpdateChecks() { UpdateChecker.shared.automatic.toggle() }
 
     // MARK: - Actions
 
