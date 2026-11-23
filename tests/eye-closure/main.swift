@@ -3,7 +3,7 @@ import CoreGraphics
 var testEyeClosure: CGFloat = 0
 let physics = CatPhysics()
 let size = 128
-func render(_ original: Bool, _ coat: CatCoatTheme, _ closure: CGFloat, _ left: Bool) -> [UInt8] {
+func render(_ original: Bool, _ coat: CatCoatTheme, _ closure: CGFloat, _ left: Bool, _ theme: EyeColorTheme = .neonChartreuse) -> [UInt8] {
     testEyeClosure = closure
     let ctx = CGContext(data:nil,width:size,height:size,bitsPerComponent:8,bytesPerRow:size*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue)!
     // A varying face background exposes repaint seams, including on Siamese shading.
@@ -14,8 +14,8 @@ func render(_ original: Bool, _ coat: CatCoatTheme, _ closure: CGFloat, _ left: 
     if closure >= 0 {
         ctx.translateBy(x:64,y:64)
         ctx.scaleBy(x:2,y:2)
-        if original { OriginalRenderer.drawEye3D(in:ctx,isLeft:left,yawRad:0,pitchRad:0,physics:physics,eyeTheme:.neonChartreuse,coat:coat) }
-        else { FixedRenderer.drawEye3D(in:ctx,isLeft:left,yawRad:0,pitchRad:0,physics:physics,eyeTheme:.neonChartreuse,coat:coat) }
+        if original { OriginalRenderer.drawEye3D(in:ctx,isLeft:left,yawRad:0,pitchRad:0,physics:physics,eyeTheme:theme,coat:coat) }
+        else { FixedRenderer.drawEye3D(in:ctx,isLeft:left,yawRad:0,pitchRad:0,physics:physics,eyeTheme:theme,coat:coat) }
     }
     return Array(UnsafeBufferPointer(start:ctx.data!.assumingMemoryBound(to:UInt8.self),count:size*size*4))
 }
@@ -42,5 +42,19 @@ for coat in CatCoatTheme.allCases {
         }
     }
 }
+for coat in CatCoatTheme.allCases {
+    for theme in EyeColorTheme.allCases {
+        for left in [true,false] {
+            precondition(render(false,coat,1,left,theme) == baseline,"Closed iris leaves pixels: \(theme)")
+            let partial = render(false,coat,0.92,left,theme)
+            for y in 20..<57 {
+                for x in 0..<size {
+                    let i=((size-1-y)*size+x)*4
+                    precondition(Array(partial[i..<i+4]) == Array(baseline[i..<i+4]),"Covered iris ring leaks")
+                }
+            }
+        }
+    }
+}
 precondition(oldFringe > 0,"Fixture did not reproduce original defect")
-print("PASS: both eyes / both skins / five closure states; open eyes unchanged, covered pixels untouched, fully closed eyes invisible. Original contaminated pixels: \(oldFringe)")
+print("PASS: both eyes / four skins / all six eye themes; five legacy closure states; open eyes unchanged, covered pixels untouched, fully closed eyes invisible. Original contaminated pixels: \(oldFringe)")
