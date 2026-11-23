@@ -786,14 +786,8 @@ private:
         RectF pawRect(end.x - pawR, end.y - pawR * 0.85f, pawR * 2.0f, pawR * 1.7f);
 
         if (coat != CatCoatTheme::Siamese) {
-            SolidBrush b(coat == CatCoatTheme::OrangeWhite ? pawColor(coat) : limbColor(coat));
-            if (coat == CatCoatTheme::Shorthair) {
-                LinearGradientBrush gradient(PointF(start.x,start.y),PointF(end.x,end.y),pawColor(coat),limbColor(coat));
-                gradient.SetWrapMode(WrapModeTileFlipXY);
-                Color colors[3]={pawColor(coat),limbColor(coat),limbColor(coat)};
-                REAL positions[3]={0,0.30f,1};gradient.SetInterpolationColors(colors,positions,3);
-                g.FillPath(&gradient,&limbPath);
-            } else g.FillPath(&b, &limbPath);
+            SolidBrush b(patterned(coat) ? pawColor(coat) : limbColor(coat));
+            g.FillPath(&b, &limbPath);
             if (!patterned(coat)) g.FillEllipse(&b, pawRect);
             else {
                 std::vector<PointF> points; int first = (int)(steps*0.72f);
