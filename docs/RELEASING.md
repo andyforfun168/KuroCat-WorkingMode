@@ -17,7 +17,7 @@
 5. 在 Releases 检查草稿、六个文件名、版本、系统要求和 SHA-256；macOS Universal 架构 / 签名、Linux 包架构 / 动态库依赖由 CI 检查。编译及打包通过不能替代各平台桌面运行验证。
 6. 发布草稿并将稳定版本设为 Latest。检查 `/releases/latest` 和主页 Releases 链接能到达该版本，且下载文件名与 README 一致。
 
-也可以在 Actions → Build KuroCat → Run workflow 中选择 `main`，勾选 `prepare_release` 并填写不带 `v` 的 `release_version`（例如 `1.2.0`）。此方式从所选提交构建并准备同样的 Release 草稿，发布时创建对应 Tag；仍需完成上述检查。不要对已有公开版本重复使用相同版本号。
+也可以在 Actions → Build KuroCat → Run workflow 中选择 `main`，勾选 `prepare_release` 并填写不带 `v` 的 `release_version`（例如 `1.2.0`）。此方式从所选提交构建并准备同样的 Release 草稿，发布时创建对应 Tag；仍需完成上述检查。不要对已有公开版本重复使用相同版本号。release job 会检测已经公开的同名 Release 并保留其正文和附件，避免发布 Tag 引发的重复构建覆盖已发布内容。
 
 完整下载名单由 `scripts/verify-release.sh` 维护。缺文件、空文件、归档错误或缺少对应版本正文时，工作流停止，不生成不完整发布。自动生成的变更记录可使用 `.github/release.yml` 分类，但应保留面向使用者的安装说明。
 
