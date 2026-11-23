@@ -459,6 +459,16 @@ enum CatRenderer {
             ctx.setFillColor(bodyColor(coat).cgColor)
             ctx.addPath(path)
             ctx.fillPath()
+            if coat == .orangeWhite {
+                // Overlap the matching fur colors at the ear/crown join so the
+                // white torso underpaint cannot leave an antialiased seam.
+                let join = CGMutablePath()
+                join.move(to: lCheek)
+                join.addCurve(to: crown, control1: H(leftCheekX - 1.5, -14), control2: H(-26 + cheekShift * 0.3, -30 + crownDrop))
+                join.addCurve(to: rCheek, control1: H(26 + cheekShift * 0.3, -30 + crownDrop), control2: H(rightCheekX + 1.5, -14))
+                ctx.setStrokeColor(earTailColor(coat).cgColor); ctx.setLineWidth(1.0); ctx.setLineCap(.round)
+                ctx.addPath(join); ctx.strokePath()
+            }
             if patterned(coat) {
                 ctx.saveGState(); ctx.addPath(path); ctx.clip()
                 drawCoatMarks(in: ctx, seatX: seatX, seatY: seatY, head: headCenter, physics: physics, coat: coat)
@@ -550,10 +560,13 @@ enum CatRenderer {
     }
 
     private static func coatMarkPoint(_ p: CGPoint, headSurface: Bool, skull: Bool, coat: CatCoatTheme, seatX: CGFloat, seatY: CGFloat,
-                                      head: CGPoint, physics: CatPhysics) -> CGPoint {
+                                      head: CGPoint, physics: CatPhysics, whiteSurface: Bool = false) -> CGPoint {
         if headSurface {
-            let depth: CGFloat = coat == .orangeWhite
-                ? 29.6 * sqrt(max(0, 1 - pow(p.x / 46, 2) - pow(p.y / 40, 2))) : 27.5
+            let radius = max(0, 1 - pow(p.x / 46, 2) - pow(p.y / 40, 2))
+            // A zero-slope depth at the cheek rim keeps the white contour from
+            // folding into a tip as it turns. Other coat patterns stay unchanged.
+            let surface = whiteSurface ? radius * radius * (3 - 2 * radius) : sqrt(radius)
+            let depth: CGFloat = coat == .orangeWhite ? 29.6 * surface : 27.5
             let projected = skull ? p : projectHead3D(x: p.x, y: p.y, z: depth,
                                           yawRad: physics.headYaw.value * 0.50,
                                           pitchRad: physics.headPitch.value * 0.36).pt
@@ -569,17 +582,29 @@ enum CatRenderer {
     private static func drawCoatMarks(in ctx: CGContext, seatX: CGFloat, seatY: CGFloat,
                                       head: CGPoint, physics: CatPhysics, coat: CatCoatTheme) {
         let marks = CoatPatterns.marks(for: coat)
+        let overlap = min(1, abs(physics.headYaw.value) * max(0, physics.headPitch.value))
+        let coverage = overlap * overlap * (3 - 2 * overlap)
         func markPath(_ mark: CoatMark) -> CGMutablePath {
             let path = CGMutablePath()
             for (i, point) in mark.points.enumerated() {
-                let p = coatMarkPoint(point, headSurface: mark.head, skull: mark.skull, coat: coat, seatX: seatX, seatY: seatY, head: head, physics: physics)
+                var local = point
+                if mark.clipToBib {
+                    let lowerRim = min(1, max(0, (point.y - 20) / 6))
+                    local.x *= 1 - 0.5 * lowerRim * (1 - coverage)
+                    if point.y > 20 { local.y = 20 + (point.y - 20) * (0.75 + 0.25 * coverage) }
+                }
+                let p = coatMarkPoint(local, headSurface: mark.head, skull: mark.skull, coat: coat, seatX: seatX, seatY: seatY, head: head, physics: physics, whiteSurface: mark.rgb == 0xF2EEE4)
                 if i == 0 { path.move(to: p) } else { path.addLine(to: p) }
             }
             if mark.width == 0 { path.closeSubpath() }
             return path
         }
+        let bib = marks.first { $0.head && !$0.skull && $0.rgb == 0xF2EEE4 && $0.points.contains { abs($0.x) > 46 } }
         for mark in marks {
+            // No extra white coverage in the front view or while looking up.
+            if mark.clipToBib && coverage == 0 { continue }
             ctx.saveGState()
+            if mark.clipToBib, let bib = bib { ctx.addPath(markPath(bib)); ctx.clip() }
             let path = markPath(mark)
             let color = rgb(mark.rgb, mark.alpha)
             if mark.width == 0 {
