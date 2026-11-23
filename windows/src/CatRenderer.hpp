@@ -127,6 +127,21 @@ private:
             if (mark.width == 0) { path.AddPolygon(points.data(), (INT)points.size()); SolidBrush brush(color); g.FillPath(&brush, &path); }
             else { path.AddLines(points.data(), (INT)points.size()); Pen pen(color, mark.width); pen.SetStartCap(LineCapRound); pen.SetEndCap(LineCapRound); pen.SetLineJoin(LineJoinRound); g.DrawPath(&pen, &path); }
         }
+        // Keep the moving cheek/chin in front of body spots, only inside the head.
+        if (coat == CatCoatTheme::OrangeWhite) {
+            for (auto it=marks.rbegin(); it!=marks.rend(); ++it) {
+                const auto& mark=*it;
+                if (!mark.head || mark.skull || mark.width!=0 || mark.rgb!=0xF2EEE4) continue;
+                GraphicsState saved=g.Save();
+                GraphicsPath oval; oval.AddEllipse(-46.0f,-40.0f,92.0f,80.0f);
+                Matrix transform; transform.Translate(head.x,head.y); transform.Rotate(physics.headTilt.value*180.0f/3.14159265f);
+                oval.Transform(&transform); g.SetClip(&oval,CombineModeIntersect);
+                std::vector<PointF> points;
+                for (const auto& p:mark.points) points.push_back(coatMarkPoint(p,true,false,coat,seatX,seatY,head,physics));
+                GraphicsPath face; face.AddPolygon(points.data(),(INT)points.size());
+                SolidBrush brush(rgb(mark.rgb)); g.FillPath(&brush,&face); g.Restore(saved); break;
+            }
+        }
     }
 
     static Gdiplus::Color eyePrimary(EyeColorTheme t, BYTE a = 255) {
@@ -794,14 +809,8 @@ private:
         RectF pawRect(end.x - pawR, end.y - pawR * 0.85f, pawR * 2.0f, pawR * 1.7f);
 
         if (coat != CatCoatTheme::Siamese) {
-            SolidBrush b(coat == CatCoatTheme::OrangeWhite ? pawColor(coat) : limbColor(coat));
-            if (coat == CatCoatTheme::Shorthair) {
-                LinearGradientBrush gradient(PointF(start.x,start.y),PointF(end.x,end.y),pawColor(coat),limbColor(coat));
-                gradient.SetWrapMode(WrapModeTileFlipXY);
-                Color colors[3]={pawColor(coat),limbColor(coat),limbColor(coat)};
-                REAL positions[3]={0,0.30f,1};gradient.SetInterpolationColors(colors,positions,3);
-                g.FillPath(&gradient,&limbPath);
-            } else g.FillPath(&b, &limbPath);
+            SolidBrush b(patterned(coat) ? pawColor(coat) : limbColor(coat));
+            g.FillPath(&b, &limbPath);
             if (!patterned(coat)) g.FillEllipse(&b, pawRect);
             else {
                 std::vector<PointF> points; int first = (int)(steps*0.72f);
