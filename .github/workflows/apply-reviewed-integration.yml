@@ -1,12 +1,6 @@
 name: Apply reviewed integration
 on:
   workflow_dispatch:
-    inputs:
-      plan:
-        description: Reviewed change set
-        type: choice
-        required: true
-        options: [fork-release, skins-only]
 permissions:
   contents: read
 jobs:
@@ -15,47 +9,24 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    env:
-      PLAN: ${{ inputs.plan }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Apply verified v1.3.7 source or isolated skin patch
+      - name: Apply verified selected v1.3.8 interactions and fixes
         shell: bash
         run: |
           set -euo pipefail
-          case "$PLAN" in
-            fork-release)
-              PATCH=scripts/integration-fork-v137.patch
-              EXPECTED=b7ab0d5dbb9fb99c2958db6d7b5d1394abccdb9cb0759d61b88d64b11b7a935e
-              BASE="$GITHUB_SHA"
-              TARGET=main
-              MESSAGE="Release v1.3.7 with paired skin eye colors"
-              ;;
-            skins-only)
-              PATCH=scripts/integration-skins-v137.patch
-              EXPECTED=9f3a0e304c387e6d13c0d375c51319f994090d63408c5391a690a1700196eada
-              BASE=e30e0c15209939d1aee4f2692c8e9e422050fb1b
-              TARGET=codex/latest-coats-pink-muzzles-eye-defaults
-              MESSAGE="Polish shorthair and orange-white coats with projected muzzles and paired eyes"
-              ;;
-            *) exit 1 ;;
-          esac
-          git show "$GITHUB_SHA:$PATCH" > /tmp/reviewed.patch
-          echo "$EXPECTED  /tmp/reviewed.patch" | sha256sum --check
-          git fetch https://github.com/chanke17/KuroCat.git main
-          git switch --detach "$BASE"
+          git show "$GITHUB_SHA:scripts/integration-fork-v138.patch" > /tmp/reviewed.patch
+          echo "f6584b5c0d2a7e8a34e693924229ed6abb0aeddcf091dbda7caacd971294c95e  /tmp/reviewed.patch" | sha256sum --check
+          git switch --detach "$GITHUB_SHA"
           git apply --check /tmp/reviewed.patch
           git apply --index /tmp/reviewed.patch
-          if [[ "$PLAN" == fork-release ]]; then
-            git rm --ignore-unmatch scripts/integration-fork-v137.patch scripts/integration-skins-v137.patch
-          fi
+          git rm scripts/integration-fork-v138.patch
           git diff --cached --check
           TREE=$(git write-tree)
-          if [[ "$PLAN" == skins-only ]]; then test "$TREE" = c5b2c2bab480bcbcd526bea1a943c3284e522acd; fi
           git config user.name "$GITHUB_ACTOR"
           git config user.email "$GITHUB_ACTOR_ID+$GITHUB_ACTOR@users.noreply.github.com"
-          COMMIT=$(git commit-tree "$TREE" -p "$BASE" -m "$MESSAGE")
-          git push origin "$COMMIT:refs/heads/$TARGET"
-          echo "Updated $TARGET to $COMMIT" >> "$GITHUB_STEP_SUMMARY"
+          COMMIT=$(git commit-tree "$TREE" -p "$GITHUB_SHA" -m "Release v1.3.8 with selected keyboard, tail and input fixes")
+          git push origin "$COMMIT:refs/heads/main"
+          echo "Updated main to $COMMIT" >> "$GITHUB_STEP_SUMMARY"
