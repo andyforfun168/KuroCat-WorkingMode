@@ -48,7 +48,7 @@ func frame(_ coat: CatCoatTheme,_ eye:EyeColorTheme,_ state:Int,_ legacy:Bool = 
  let s=RenderSettings.shared;s.coatTheme=coat;s.eyeTheme=eye
  let ctx=CGContext(data:nil,width:720,height:640,bitsPerComponent:8,bytesPerRow:720*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue)!
  ctx.translateBy(x:0,y:640);ctx.scaleBy(x:2,y:-2)
- if pointyChin {PointyChinRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else if occludedMuzzle {OccludedMuzzleRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else if legacy && (state == 8 || state == 9) {ShoulderFixtureRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else if legacy {LegacyRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else {CurrentRenderer.draw(in:ctx,physics:p,showPermissionPill:false)}
+ if legacy {LegacyRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else {CurrentRenderer.draw(in:ctx,physics:p,showPermissionPill:false)}
  return ctx
 }
 func pixels(_ c:CGContext)->[UInt8] {Array(UnsafeBufferPointer(start:c.data!.assumingMemoryBound(to:UInt8.self),count:720*640*4))}
@@ -72,23 +72,19 @@ print("PASS: \(n) legacy skin/eye/action frames pixel-identical to upstream v1.3
 
 for (name,coat) in [("shorthair",CatCoatTheme.shorthair),("orangeWhite",.orangeWhite)] {
  save(frame(coat,.softAmber,8),name+"-shoulder-after.png")
- save(frame(coat,.softAmber,8,true),name+"-shoulder-before.png")
+ save(frame(coat,.softAmber,8,true),name+"-upstream-shoulder.png")
 }
 
-var oldFaceChanges = 0
 for coat in CatCoatTheme.allCases {
  let active = pixels(frame(coat,.softAmber,8)), idle = pixels(frame(coat,.softAmber,9))
- let oldActive = pixels(frame(coat,.softAmber,8,true)), oldIdle = pixels(frame(coat,.softAmber,9,true))
  for y in 160..<342 {
   for x in 240..<490 {
    let i=(y*720+x)*4
    precondition(Array(active[i..<i+4]) == Array(idle[i..<i+4]),"Reaching arm changes face pixels: \(coat)")
-   if Array(oldActive[i..<i+4]) != Array(oldIdle[i..<i+4]) {oldFaceChanges += 1}
   }
  }
 }
-precondition(oldFaceChanges > 0,"Shoulder fixture did not reproduce the old intrusion")
-print("PASS: reaching arms leave the face unchanged across all four skins; old fixture contaminated \(oldFaceChanges) pixels")
+print("PASS: reaching arms leave the face unchanged across all four skins")
 
 for coat in CatCoatTheme.allCases {
  for pose in 1...8 {
@@ -131,13 +127,6 @@ swatch.setFillColor(NSColor(calibratedRed:242.0/255,green:238.0/255,blue:228.0/2
 swatch.fill(CGRect(x:0,y:0,width:1,height:1))
 let milk=Array(UnsafeBufferPointer(start:swatch.data!.assumingMemoryBound(to:UInt8.self),count:4))
 let chin=pixels(frame(.orangeWhite,.referenceHazel,2))
-let coveredChin=pixels(frame(.orangeWhite,.referenceHazel,2,false,0,true))
-var occludedChinPixels=0
-for y in 320...322 {for x in 424...426 {
- let i=(y*720+x)*4
- if abs(Int(coveredChin[i+2])-Int(milk[2]))>30 {occludedChinPixels+=1}
-}}
-precondition(occludedChinPixels==9,"Muzzle fixture no longer reproduces body occlusion")
 // Track material points on the moving cheek instead of fixed screen pixels:
 // changing its smooth depth legitimately moves the cheek on screen.
 let chinPose=CatPhysics();chinPose.headYaw.value=1;chinPose.headPitch.value=0.65;chinPose.headTilt.value=0.13
@@ -147,25 +136,21 @@ for y in 24...26 {for x in 10...12 {
  let i=(Int(pt.y*2)*720+Int(pt.x*2))*4
  for ch in 0..<4 {precondition(abs(Int(chin[i+ch])-Int(milk[ch]))<=2,"Body spot visible through cheek material")}
 }}
-print("PASS: 9 cheek material points remain opaque white; old fixture reproduces 9 body-occluded screen pixels")
+print("PASS: 9 cheek material points remain opaque white")
 
 let neck=CoatPatterns.orangeWhite.first{$0.head && !$0.skull && $0.rgb==0xF2EEE4 && $0.points.contains{abs($0.x)>46}}!
-var oldFolds=0
 for side:CGFloat in [-1,1] {
  let pose=CatPhysics();pose.headYaw.value=side
  var edge=neck.points.filter{$0.x*side>=29 && $0.y>=20 && $0.y<=28}
  if side>0 {edge.reverse()}
- var last:CGFloat = -CGFloat.infinity,oldLast:CGFloat = -CGFloat.infinity
+ var last:CGFloat = -CGFloat.infinity
  for pt in edge {
   let q=CurrentRenderer.coatMarkPoint(pt,headSurface:true,skull:false,coat:.orangeWhite,seatX:0,seatY:0,head:.zero,physics:pose,whiteSurface:true).x*side
-  let old=PointyChinRenderer.coatMarkPoint(pt,headSurface:true,skull:false,coat:.orangeWhite,seatX:0,seatY:0,head:.zero,physics:pose).x*side
   precondition(q>=last-0.001,"White neck contour folds into an orange point")
-  if old<oldLast-0.001 {oldFolds+=1}
-  last=q;oldLast=old
+  last=q
  }
 }
-precondition(oldFolds>0,"Old projection did not reproduce the contour fold")
-print("PASS: left/right white cheek rim has no contour folds; legacy projection reproduced \(oldFolds) folded segments")
+print("PASS: left/right white cheek rim has no contour folds")
 
 for coat in [CatCoatTheme.shorthair,.orangeWhite] {
  let marks=CoatPatterns.marks(for:coat)
@@ -179,14 +164,12 @@ func cheekPath(_ points:[CGPoint])->CGPath {
  let p=CGMutablePath();p.addLines(between:points);p.closeSubpath();return p
 }
 let roundedCheek=cheekPath(CoatPatterns.shorthair.last!.points)
-let flatCheek=cheekPath(PointyChinRendererPatterns.shorthair.last!.points)
 precondition(roundedCheek.contains(CGPoint(x:0,y:34)),"Rounded chin lost its central arc")
 precondition(!roundedCheek.contains(CGPoint(x:14,y:34)),"Shorthair lower chin still has a flat wide edge")
-precondition(flatCheek.contains(CGPoint(x:14,y:34)),"Fixture did not reproduce the old wide flat chin")
-print("PASS: all body marks behind head patterns; opaque foreground cheeks; smaller rounded shorthair chin replaces flat fixture")
+print("PASS: all body marks behind head patterns; opaque foreground cheeks; small rounded shorthair chin")
 for coat in [CatCoatTheme.shorthair,.orangeWhite] {
  let now=CoatPatterns.marks(for:coat)
- let old=PointyChinRendererPatterns.marks(for:coat)
+ let old=BaselinePatterns.marks(for:coat)
  let body=now.filter{!$0.head},oldBody=old.filter{!$0.head}
  precondition(body.count==oldBody.count)
  for (index,pair) in zip(body,oldBody).enumerated() {

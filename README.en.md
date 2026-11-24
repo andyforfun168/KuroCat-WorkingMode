@@ -142,3 +142,5 @@ Input drives local animations and counters; keystroke contents are not recorded 
 ## 📄 License
 
 [MIT License](LICENSE)
+
+Skin selection pairs Orange & White with Amber Gold, and American Shorthair with Golden Hazel. You can still choose another eye color afterward; selecting the skin again restores its paired color.

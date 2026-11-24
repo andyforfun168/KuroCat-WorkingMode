@@ -28,7 +28,7 @@
 #include <fcntl.h>
 #include <glib-unix.h>
 
-#define KUROCAT_VERSION_STR "1.3.6"
+#define KUROCAT_VERSION_STR "1.3.7"
 static constexpr const char* APP_VERSION = KUROCAT_VERSION_STR;
 // Other KuroCat builds scan installed binaries for this marker (see readBinaryVersion) to find the
 // newest copy WITHOUT executing it. Always derived from KUROCAT_VERSION_STR.
@@ -471,7 +471,8 @@ static void showPopupMenu(LinuxApp& app, GdkEventButton* evt) {
                 auto coat = (CatCoatTheme)(intptr_t)p;
                 g_app->settings.coatTheme = coat;
                 g_app->settings.eyeTheme = coat == CatCoatTheme::Siamese ? EyeColorTheme::SiameseBlue :
-                    (coat == CatCoatTheme::ClassicBlack ? EyeColorTheme::NeonChartreuse : EyeColorTheme::SoftAmber);
+                    (coat == CatCoatTheme::ClassicBlack ? EyeColorTheme::NeonChartreuse :
+                    (coat == CatCoatTheme::Shorthair ? EyeColorTheme::ReferenceHazel : EyeColorTheme::WarmAmber));
                 g_app->settings.save();
             }), (gpointer)(intptr_t)c);
             gtk_menu_shell_append(GTK_MENU_SHELL(sub), it);

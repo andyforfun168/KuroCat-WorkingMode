@@ -45,7 +45,7 @@
 
 namespace {
 
-constexpr const wchar_t* APP_VERSION = L"1.3.6";
+constexpr const wchar_t* APP_VERSION = L"1.3.7";
 constexpr const wchar_t* VERSION_PROP = L"KuroCatVersion"; // set on the tray owner window so newer builds can take over older ones
 constexpr const wchar_t* TRAY_OWNER_CLASS = L"KuroCatTrayOwnerClass";
 constexpr const wchar_t* OVERLAY_CLASS = L"KuroCatOverlayWindowClass";
@@ -640,7 +640,7 @@ void showContextMenu(AppState& app, POINT screenPt) {
         case CMD_COAT_SHORTHAIR:
         case CMD_COAT_ORANGE_WHITE:
             app.settings.coatTheme = cmd == CMD_COAT_SHORTHAIR ? CatCoatTheme::Shorthair : CatCoatTheme::OrangeWhite;
-            app.settings.eyeTheme = EyeColorTheme::SoftAmber;
+            app.settings.eyeTheme = cmd == CMD_COAT_SHORTHAIR ? EyeColorTheme::ReferenceHazel : EyeColorTheme::WarmAmber;
             app.settings.saveToRegistry();
             break;
         case CMD_EYE_SOFT_AMBER: app.settings.eyeTheme = EyeColorTheme::SoftAmber; app.settings.saveToRegistry(); break;

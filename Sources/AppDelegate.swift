@@ -10,7 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var isHandingOverToNewerCopy = false
 
     private var currentAppVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.3.6"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.3.7"
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -422,8 +422,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             CatSettings.shared.eyeTheme = .neonChartreuse
         case .siamese:
             CatSettings.shared.eyeTheme = .siameseBlue
-        case .shorthair, .orangeWhite:
-            CatSettings.shared.eyeTheme = .softAmber
+        case .shorthair:
+            CatSettings.shared.eyeTheme = .referenceHazel
+        case .orangeWhite:
+            CatSettings.shared.eyeTheme = .warmAmber
         }
     }
 
