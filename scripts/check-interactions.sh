@@ -9,7 +9,7 @@ import sys
 root,out=map(Path,sys.argv[1:])
 for p in (root/'Sources').glob('*.swift'):
     if p.name=='main.swift':continue
-    source=p.read_text().replace('UserDefaults.standard','fixtureDefaults')
+    source=p.read_text().replace('UserDefaults.standard','fixtureDefaults').replace('SkinLibrary.shared.skin(id: customSkin) ?? SkinSpec.builtIn(coatTheme)', 'SkinSpec.builtIn(coatTheme)')
     if p.name=='InputEngine.swift':source=source.replace('private(set) ','')
     (out/p.name).write_text(source)
 (out/'main.swift').write_text((root/'tests/interactions/main.swift').read_text())

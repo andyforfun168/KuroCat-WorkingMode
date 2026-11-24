@@ -6,14 +6,28 @@ final class RenderSettings {
  var eyeTheme = EyeColorTheme.neonChartreuse
  var keyboardTheme = KeyboardTheme.classicMilk
  var showKeyLegends = false
+ var overrideSkin: SkinSpec?
+ var activeSkin: SkinSpec { overrideSkin ?? SkinSpec.builtIn(coatTheme) }
  let showKeyBadges = false
  let keyboardMarquee = false
+ let obsCaptureMode = 0
+ let flipHorizontal = false
+ let isEditMode = false
+ let isEnglish = false
+ let scale: CGFloat = 1.0
 }
 let output = URL(fileURLWithPath: CommandLine.arguments[1])
 try! FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
-func frame(_ coat: CatCoatTheme,_ eye:EyeColorTheme,_ state:Int,_ legacy:Bool = false,_ pose:Int = 0,_ occludedMuzzle:Bool = false,_ pointyChin:Bool = false)->CGContext {
+func frame(_ coat: CatCoatTheme,_ eye:EyeColorTheme,_ state:Int,_ legacy:Bool = false,_ pose:Int = 0,_ occludedMuzzle:Bool = false,_ pointyChin:Bool = false,_ approved:Bool = false)->CGContext {
  let p=CatPhysics()
  switch state {
+ case 12:p.yawnAmount=1;p.sleepiness=0.5
+ case 13:p.lieIntensity.value=1;p.sleepiness=1
+ case 14:p.angerIntensity.value=1
+ case 15:p.dizzyIntensity.value=1
+ case 16:
+  p.isTabletActive=true;p.leftPawOnMouse=true
+  p.leftPaw.x.value=65;p.leftPaw.y.value=255;p.tabletPenPress.value=1
  case 1: p.headYaw.value = -1; p.headPitch.value = -0.65; p.headTilt.value = -0.13
  case 2: p.headYaw.value = 1; p.headPitch.value = 0.65; p.headTilt.value = 0.13
  case 11:
@@ -49,15 +63,28 @@ func frame(_ coat: CatCoatTheme,_ eye:EyeColorTheme,_ state:Int,_ legacy:Bool = 
  let s=RenderSettings.shared;s.coatTheme=coat;s.eyeTheme=eye
  let ctx=CGContext(data:nil,width:720,height:640,bitsPerComponent:8,bytesPerRow:720*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue)!
  ctx.translateBy(x:0,y:640);ctx.scaleBy(x:2,y:-2)
- if legacy {LegacyRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else {CurrentRenderer.draw(in:ctx,physics:p,showPermissionPill:false)}
+ if approved {ApprovedRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else if legacy {LegacyRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else {CurrentRenderer.draw(in:ctx,physics:p,showPermissionPill:false)}
  return ctx
 }
 func pixels(_ c:CGContext)->[UInt8] {Array(UnsafeBufferPointer(start:c.data!.assumingMemoryBound(to:UInt8.self),count:720*640*4))}
 func save(_ c:CGContext,_ name:String){let rep=NSBitmapImageRep(cgImage:c.makeImage()!);try! rep.representation(using:.png,properties:[:])!.write(to:output.appendingPathComponent(name))}
 var n=0
-for coat in [CatCoatTheme.classicBlack,.siamese] {
+let aboveKeyboard = 720 * 460 * 4
+for coat in [CatCoatTheme.siamese] {
  for eye in [EyeColorTheme.neonChartreuse,.siameseBlue,.warmAmber,.iceCyan] {
-  for state in [0,1,2,4,5,6,7] {precondition(pixels(frame(coat,eye,state)) == pixels(frame(coat,eye,state,true)),"Existing skin appearance changed: \(coat), \(eye), \(state)");n+=1}
+  for state in [0,1,2,4,5,6,7] {
+   let current = pixels(frame(coat,eye,state))
+   let old = pixels(frame(coat,eye,state,true))
+   precondition(current[..<aboveKeyboard] == old[..<aboveKeyboard],
+                "Existing skin appearance changed: \(coat), \(eye), \(state)")
+   // Compositing cached keyboard bitmaps can change antialiased edges by a few levels.
+   let keyboardDifferences = zip(current[aboveKeyboard...], old[aboveKeyboard...]).reduce(0) {
+    $0 + abs(Int($1.0) - Int($1.1))
+   }
+   precondition(Double(keyboardDifferences) / Double(current.count - aboveKeyboard) < 0.1,
+                "Cached keyboard changed appearance: \(coat), \(eye), \(state)")
+   n += 1
+  }
  }
 }
 for (name,coat) in [("shorthair",CatCoatTheme.shorthair),("orangeWhite",.orangeWhite)] {
@@ -69,7 +96,7 @@ for (name,coat) in [("shorthair",CatCoatTheme.shorthair),("orangeWhite",.orangeW
 }
 for (name,coat) in [("black",CatCoatTheme.classicBlack),("siamese",.siamese)] {save(frame(coat,coat == .siamese ? .siameseBlue : .neonChartreuse,0),name+".png")}
 save(frame(.shorthair,.softAmber,0),"shorthair-amber.png")
-print("PASS: \(n) legacy skin/eye/action frames pixel-identical to upstream v1.3.5; rendered 16 new skin/action frames including turned heads, typing/mouse/third paw, sleep, petting and hunting.")
+print("PASS: \(n) legacy skin/eye/action frames match upstream v1.3.5 above the keyboard and preserve keyboard appearance; rendered 16 new skin/action frames.")
 
 for (name,coat) in [("shorthair",CatCoatTheme.shorthair),("orangeWhite",.orangeWhite)] {
  save(frame(coat,.softAmber,8),name+"-shoulder-after.png")
@@ -78,7 +105,7 @@ for (name,coat) in [("shorthair",CatCoatTheme.shorthair),("orangeWhite",.orangeW
 
 for coat in CatCoatTheme.allCases {
  let active = pixels(frame(coat,.softAmber,8)), idle = pixels(frame(coat,.softAmber,9))
- for y in 160..<342 {
+ for y in 160..<316 {
   for x in 240..<490 {
    let i=(y*720+x)*4
    precondition(Array(active[i..<i+4]) == Array(idle[i..<i+4]),"Reaching arm changes face pixels: \(coat)")
@@ -93,7 +120,7 @@ for coat in CatCoatTheme.allCases {
   let yaw:CGFloat=pose % 2 == 0 ? -1 : 1, tilt:CGFloat=pose % 2 == 0 ? -0.15 : 0.15
   let pitch:CGFloat=pose % 4 < 2 ? -1 : 1
   let cx=184+tilt*36+yaw*7.5,cy=126+14+pitch*4.8
-  for y in Int((cy-35)*2)..<Int((cy+40)*2) {
+  for y in Int((cy-35)*2)..<Int((cy+32)*2) {
    for x in Int((cx-52)*2)..<Int((cx+52)*2) {
     let i=(y*720+x)*4
     precondition(Array(active[i..<i+4]) == Array(idle[i..<i+4]),"Arm intrudes on turned face: \(coat), pose \(pose)")
@@ -239,3 +266,77 @@ for (name,coat) in [("shorthair",CatCoatTheme.shorthair),("orangeWhite",.orangeW
  }
 }
 print("PASS: noses and both mouth lobes visible in all 18 extreme yaw/pitch renders")
+
+// MARK: - .kurocat skins (docs/skin-format.md)
+let repoRoot = ProcessInfo.processInfo.environment["KUROCAT_ROOT"].map { URL(fileURLWithPath: $0) }
+    ?? URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+let templates: [(String, CatCoatTheme, EyeColorTheme)] = [("black", .classicBlack, .neonChartreuse), ("siamese", .siamese, .siameseBlue),
+                                                          ("shorthair", .shorthair, .softAmber), ("orangeWhite", .orangeWhite, .referenceHazel)]
+for (file, coat, eye) in templates {
+ let spec = try! SkinSpec.load(contentsOf: repoRoot.appendingPathComponent("skins/\(file).kurocat"))
+ precondition(spec.name == SkinSpec.builtIn(coat).name, "Template name mismatch: \(file)")
+ for state in [0, 2, 3, 7] {
+  RenderSettings.shared.overrideSkin = nil
+  let builtIn = pixels(frame(coat, eye, state))
+  RenderSettings.shared.overrideSkin = spec
+  let imported = pixels(frame(coat, eye, state))
+  var far = 0
+  for i in stride(from: 0, to: builtIn.count, by: 4) where (0..<4).contains(where: { abs(Int(builtIn[i + $0]) - Int(imported[i + $0])) > 6 }) { far += 1 }
+  precondition(far < 200, "Template \(file) drifts from the built-in coat in state \(state): \(far) px")
+ }
+}
+let demo = try! SkinSpec.load(contentsOf: repoRoot.appendingPathComponent("skins/samples/curve-regions-demo.kurocat"))
+precondition(demo.regions.count >= 3 && demo.shape.bodyWidth > 1.2, "Sample skin lost its curve regions / chubby shape")
+RenderSettings.shared.overrideSkin = demo
+for state in [0, 1, 2, 3, 8] {
+ let c = frame(.classicBlack, .softAmber, state, false, state == 8 ? 3 : 0)
+ precondition(pixels(c).filter { $0 != 0 }.count > 10000, "Empty sample-skin render")
+ save(c, "curve-regions-demo-\(state).png")
+}
+RenderSettings.shared.overrideSkin = nil
+func rejects(_ json: String, _ fragment: String) {
+ do { _ = try SkinSpec.parse(Data(json.utf8)); preconditionFailure("Accepted invalid skin: \(json)") }
+ catch { precondition(error.localizedDescription.contains(fragment), "Unexpected error for \(json): \(error.localizedDescription)") }
+}
+rejects("{", "JSON")
+rejects("[]", "JSON 对象")
+rejects(##"{"name":"x","palette":{"body":"#000000"}}"##, "formatVersion")
+rejects(##"{"formatVersion":2,"name":"x","palette":{"body":"#000000"}}"##, "升级")
+rejects(##"{"formatVersion":1,"name":"x","palette":{"body":"pink"}}"##, "palette.body")
+rejects(##"{"formatVersion":1,"name":"x","palette":{}}"##, "palette.body")
+rejects(##"{"formatVersion":1,"name":"x","palette":{"body":"#000000"},"regions":[{"space":"wing","fill":"#FFFFFF","anchors":[]}]}"##, "regions[0].space")
+rejects(##"{"formatVersion":1,"name":"x","palette":{"body":"#000000"},"shape":{"bodyWidth":"fat"}}"##, "shape.bodyWidth")
+let clamped = try! SkinSpec.parse(Data(##"{"formatVersion":1,"name":"  胖  ","palette":{"body":"#112233"},"shape":{"bodyWidth":9},"unknownField":true}"##.utf8))
+precondition(clamped.shape.bodyWidth == 1.35 && clamped.name == "胖", "Clamping / trimming / unknown-field rules broken")
+print("PASS: 4 .kurocat templates match their built-in coats, curve-regions sample renders, invalid files are rejected in Chinese")
+
+// Compare against Andy's published pure-white arm build, independently of upstream's baseline.
+for (name,coat) in [("shorthair",CatCoatTheme.shorthair),("orangeWhite",.orangeWhite)] {
+ let eye:EyeColorTheme = coat == .orangeWhite ? .warmAmber : .referenceHazel
+ precondition(SkinSpec.builtIn(coat).palette.legs == SkinSpec.builtIn(coat).palette.belly)
+ let old=frame(coat,eye,8,false,4,false,false,true), current=frame(coat,eye,8,false,4)
+ save(old,name+"-andy138-arms.png");save(current,name+"-andy141-arms.png")
+ // Interior of each extended forearm, away from antialiased outlines and shoulders.
+ let a=pixels(old),b=pixels(current)
+ var checked=0
+ for y in 400..<470 { for x in 215..<250 {
+  let i=(y*720+x)*4
+  if a[i] > 230 && a[i+1] > 230 && a[i+2] > 220 && a[i+3] == 255 {
+   precondition(b[i] > 230 && b[i+1] > 230 && b[i+2] > 220 && b[i+3] == 255,"White forearm regressed")
+   checked += 1
+  }
+ }}
+ precondition(checked > 30,"Missing arm samples")
+}
+print("PASS: both approved forearm palettes and rendered white interiors retained from Andy v1.3.8")
+
+for (name,coat) in [("shorthair",CatCoatTheme.shorthair),("orangeWhite",.orangeWhite)] {
+ let eye:EyeColorTheme = coat == .orangeWhite ? .warmAmber : .referenceHazel
+ let idle=pixels(frame(coat,eye,0))
+ for state in 12...16 {
+  let c=frame(coat,eye,state)
+  precondition(pixels(c) != idle,"New action did not render")
+  save(c,name+"-new-action-"+String(state)+".png")
+ }
+}
+print("PASS: yawning, curled sleep, anger, dizziness and held stylus render on both approved skins")

@@ -2,6 +2,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <cmath>
+#include <string>
 #include <vector>
 #include <unordered_map>
 #include <random>
@@ -13,7 +14,9 @@ enum class CatCoatTheme : int {
     ClassicBlack = 0,
     Siamese = 1,
     Shorthair = 2,
-    OrangeWhite = 3
+    OrangeWhite = 3,
+    Dazed = 4,
+    Tabby = 5
 };
 
 enum class KeyboardTheme : int {
@@ -28,7 +31,8 @@ enum class EyeColorTheme : int {
     WarmAmber = 2,
     IceCyan = 3,
     SoftAmber = 4,
-    ReferenceHazel = 5
+    ReferenceHazel = 5,
+    OliveGold = 6
 };
 
 struct CatSettings {
@@ -38,14 +42,23 @@ struct CatSettings {
     bool footEasterEgg = true;
     bool tailEasterEgg = true;
     bool keyboardMarquee = true;
+    int obsCaptureMode = 0; // 0 = off, 1 = OBS transparent window capture, 2 = OBS green screen (#00FF00)
+    bool obsHideDesktop = false;
+    bool autoHideFullscreen = false;
+    int tabletMode = 0; // 0 = auto-detect tablet/stylus, 1 = always tablet, 2 = always mouse
+    bool flipHorizontal = false;
+    bool isEnglish = false;
+    bool isEditMode = false; // runtime-only interactive resize & flip box
     bool petInteraction = true;
     bool fullClickThrough = false;
     bool alwaysOnTop = true;
-    bool runAsAdmin = false; // relaunch elevated so keys typed into admin-level games are visible (UIPI)
+    bool runAsAdmin = false; // relaunch elevated so keys typed into admin-level apps/games are visible (UIPI)
     float scale = 1.0f;
     CatCoatTheme coatTheme = CatCoatTheme::ClassicBlack;
     KeyboardTheme keyboardTheme = KeyboardTheme::ClassicMilk;
     EyeColorTheme eyeTheme = EyeColorTheme::NeonChartreuse;
+    // Content id (16 hex chars) of the imported .kurocat skin in use; empty = the built-in coatTheme.
+    std::string customSkin;
     int posX = -99999;
     int posY = -99999;
 
@@ -63,14 +76,33 @@ struct CatSettings {
         footEasterEgg    = readDword(L"FootEasterEgg", 1) != 0;
         tailEasterEgg    = readDword(L"TailEasterEgg", 1) != 0;
         keyboardMarquee  = readDword(L"KeyboardMarquee", 1) != 0;
+        obsCaptureMode   = std::clamp((int)readDword(L"OBSCaptureMode", 0), 0, 2);
+        obsHideDesktop   = readDword(L"OBSHideDesktop", 0) != 0;
+        autoHideFullscreen = readDword(L"AutoHideFullscreen", 0) != 0;
+        tabletMode       = std::clamp((int)readDword(L"TabletMode", 0), 0, 2);
+        flipHorizontal   = readDword(L"FlipHorizontal", 0) != 0;
+        isEnglish        = readDword(L"LanguageEnglish", 0) != 0;
         petInteraction   = readDword(L"PetInteraction", 1) != 0;
         fullClickThrough = readDword(L"FullClickThrough", 0) != 0;
         alwaysOnTop      = readDword(L"AlwaysOnTop", 1) != 0;
         runAsAdmin       = readDword(L"RunAsAdmin", 0) != 0;
         scale            = std::clamp((float)readDword(L"ScalePct", 100) / 100.0f, 0.5f, 2.0f);
-        coatTheme        = (CatCoatTheme)std::clamp((int)readDword(L"CoatTheme", 0), 0, 3);
+        coatTheme        = (CatCoatTheme)std::clamp((int)readDword(L"CoatTheme", 0), 0, static_cast<int>(CatCoatTheme::Tabby));
         keyboardTheme    = (KeyboardTheme)std::clamp((int)readDword(L"KeyboardTheme", 0), 0, 2);
-        eyeTheme         = (EyeColorTheme)std::clamp((int)readDword(L"EyeTheme", 0), 0, 5);
+        eyeTheme         = (EyeColorTheme)std::clamp((int)readDword(L"EyeTheme", 0), 0, (int)EyeColorTheme::OliveGold);
+        {
+            wchar_t buf[32] = {0};
+            DWORD type = 0, sz = sizeof(buf) - sizeof(wchar_t);
+            customSkin.clear();
+            if (RegQueryValueExW(hKey, L"CustomSkin", nullptr, &type, (LPBYTE)buf, &sz) == ERROR_SUCCESS && type == REG_SZ) {
+                for (int i = 0; buf[i] && i < 16; ++i) {
+                    wchar_t c = buf[i];
+                    if (!((c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f'))) { customSkin.clear(); break; }
+                    customSkin += (char)c;
+                }
+                if (customSkin.size() != 16) customSkin.clear();
+            }
+        }
         DWORD hasPos     = readDword(L"HasPos", 0);
         if (hasPos) {
             posX = (int)readDword(L"PosX", 0);
@@ -91,6 +123,12 @@ struct CatSettings {
         writeDword(L"FootEasterEgg", footEasterEgg ? 1 : 0);
         writeDword(L"TailEasterEgg", tailEasterEgg ? 1 : 0);
         writeDword(L"KeyboardMarquee", keyboardMarquee ? 1 : 0);
+        writeDword(L"OBSCaptureMode", (DWORD)obsCaptureMode);
+        writeDword(L"OBSHideDesktop", obsHideDesktop ? 1 : 0);
+        writeDword(L"AutoHideFullscreen", autoHideFullscreen ? 1 : 0);
+        writeDword(L"TabletMode", (DWORD)tabletMode);
+        writeDword(L"FlipHorizontal", flipHorizontal ? 1 : 0);
+        writeDword(L"LanguageEnglish", isEnglish ? 1 : 0);
         writeDword(L"PetInteraction", petInteraction ? 1 : 0);
         writeDword(L"FullClickThrough", fullClickThrough ? 1 : 0);
         writeDword(L"AlwaysOnTop", alwaysOnTop ? 1 : 0);
@@ -99,6 +137,10 @@ struct CatSettings {
         writeDword(L"CoatTheme", (DWORD)coatTheme);
         writeDword(L"KeyboardTheme", (DWORD)keyboardTheme);
         writeDword(L"EyeTheme", (DWORD)eyeTheme);
+        {
+            std::wstring id(customSkin.begin(), customSkin.end());
+            RegSetValueExW(hKey, L"CustomSkin", 0, REG_SZ, (const BYTE*)id.c_str(), (DWORD)((id.size() + 1) * sizeof(wchar_t)));
+        }
         if (posX != -99999 && posY != -99999) {
             writeDword(L"HasPos", 1);
             writeDword(L"PosX", (DWORD)posX);
@@ -191,9 +233,34 @@ public:
     Spring2D eyeGaze{{0.0f, 0.0f}};
     Spring1D pupilScale{1.0f};
     Spring1D huntIntensity{0.0f};
+    Spring1D scruffDrag{0.0f};
+    Spring1D scruffSwing{0.0f};
+    Spring1D lieIntensity{0.0f};
+    Spring1D angerIntensity{0.0f};
+    Spring1D dizzyIntensity{0.0f};
+    float dizzyPhase = 0.0f;
+    bool isScruffDragging_ = false;
+    float scruffDragDx_ = 0.0f;
+    float fastMouseDuration_ = 0.0f;
+    float dizzyTimer_ = 0.0f;
     Spring2D mouseOffset{{0.0f, 0.0f}};
     Spring1D mousePressLeft{0.0f};
     Spring1D mousePressRight{0.0f};
+
+    static Pt tabletQuadPoint(float u, float v) {
+        constexpr Pt tl = { 18.0f, 235.0f }, tr = { 94.0f, 240.0f };
+        constexpr Pt bl = { 13.0f, 284.0f }, br = { 91.0f, 289.0f };
+        float topX = tl.x + (tr.x - tl.x) * u, topY = tl.y + (tr.y - tl.y) * u;
+        float botX = bl.x + (br.x - bl.x) * u, botY = bl.y + (br.y - bl.y) * u;
+        return { topX + (botX - topX) * v, topY + (botY - topY) * v };
+    }
+
+    struct TabletStrokePoint { Pt point; float age = 0.0f; };
+    bool isTabletActive = false;
+    Spring2D tabletNib{{60.0f, 261.0f}};
+    Spring1D tabletPenPress{0.0f};
+    Spring1D tabletPenTilt{0.0f};
+    std::vector<TabletStrokePoint> tabletTrail;
 
     bool leftPawOnMouse = false;
     bool leftPawTyping = false;
@@ -210,10 +277,14 @@ public:
     float petBodyIntensity = 0.0f;
     int totalPetSessions = 0;
     float sleepiness = 0.0f;
+    float yawnAmount = 0.0f;
+    float yawnTimer_ = 0.0f;
+    bool isYawning_ = false;
+    bool hasYawnedThisIdle_ = false;
 
     float effectiveEyeClosure() const {
         float petClose = std::max(petHeadIntensity, petBodyIntensity * 0.62f);
-        float sleepClose = sleepiness * 0.92f;
+        float sleepClose = std::max(sleepiness * 0.92f, yawnAmount * 0.96f);
         return std::min(1.0f, std::max(blinkProgress_, std::max(petClose, sleepClose)));
     }
 
@@ -263,14 +334,29 @@ public:
             }
             pupilScale.target = 1.12f;
             earTwitch.velocity -= 2.2f;
-            if (settings.showMouseBadges) {
-                std::wstring lbl = (button == 0) ? L"\u5DE6\u952E" : (button == 1 ? L"\u53F3\u952E" : L"\u4E2D\u952E");
+            if (settings.showKeyBadges) {
+                std::wstring lbl = settings.isEnglish
+                    ? (button == 0 ? L"LMB" : (button == 1 ? L"RMB" : L"MMB"))
+                    : ((button == 0) ? L"\u5DE6\u952E" : (button == 1 ? L"\u53F3\u952E" : L"\u4E2D\u952E"));
                 Pt pt = { MouseBaseCenter.x + mouseOffset.point().x, MouseBaseCenter.y + mouseOffset.point().y - 6.0f };
                 spawnFloatingKeycap(lbl, pt, now);
             }
         } else {
             if (button == 0) mousePressLeft.target = 0.0f;
             else mousePressRight.target = 0.0f;
+        }
+    }
+
+    void setDragging(bool dragging, float dragDx = 0.0f) {
+        isScruffDragging_ = dragging;
+        if (dragging) {
+            scruffDragDx_ = dragDx;
+            sleepiness = 0.0f;
+            dizzyTimer_ = 0.0f;
+            fastMouseDuration_ = 0.0f;
+        } else {
+            scruffDragDx_ = 0.0f;
+            bodySquash.velocity -= 1.8f;
         }
     }
 
@@ -383,9 +469,35 @@ public:
             }
         }
 
-        // 2. Sleepy idle detection
+        // 2. Sleepy idle detection (+ cute yawn right before drifting off to sleep!)
         double lastAny = std::max(engine.lastKeyActivityTime, std::max(engine.lastMouseMoveTime, lastPetTime_));
         double idleSec = lastAny > 0.0 ? (now - lastAny) : 0.0;
+        if (activeKeys.empty() && idleSec > 42.0 && !isYawning_ && !hasYawnedThisIdle_) {
+            isYawning_ = true;
+            hasYawnedThisIdle_ = true;
+            yawnTimer_ = 0.0f;
+        }
+        if (!activeKeys.empty() || idleSec < 5.0) {
+            isYawning_ = false;
+            hasYawnedThisIdle_ = false;
+            yawnAmount = std::max(0.0f, yawnAmount - dt * 6.0f);
+        } else if (isYawning_) {
+            yawnTimer_ += dt;
+            if (yawnTimer_ < 0.65f) {
+                float u = yawnTimer_ / 0.65f;
+                yawnAmount = u * u * (3.0f - 2.0f * u);
+            } else if (yawnTimer_ < 1.55f) {
+                yawnAmount = 1.0f;
+            } else if (yawnTimer_ < 2.35f) {
+                float u = (2.35f - yawnTimer_) / 0.80f;
+                yawnAmount = u * u * (3.0f - 2.0f * u);
+            } else {
+                yawnAmount = 0.0f;
+                isYawning_ = false;
+            }
+        } else {
+            yawnAmount = std::max(0.0f, yawnAmount - dt * 4.0f);
+        }
         if (activeKeys.empty() && idleSec > 45.0) {
             float targetSleep = std::min(1.0f, (float)((idleSec - 45.0) / 35.0));
             sleepiness += (targetSleep - sleepiness) * dt * 1.5f;
@@ -401,8 +513,9 @@ public:
         }
 
         // 2b. Fast Mouse Movement -> Hunting Mode (big round boba pupils + low crouch!)
+        // Sustained > 10s of rapid mouse shaking -> Dizzy spiral eyes & slump beside keyboard!
         float mouseSpeed = std::hypot(engine.mouseVelocity.x, engine.mouseVelocity.y);
-        if (mouseSpeed > 1500.0f && petHeadIntensity < 0.25f && petBodyIntensity < 0.25f) {
+        if (!isScruffDragging_ && dizzyTimer_ <= 0.0f && mouseSpeed > 1500.0f && petHeadIntensity < 0.25f && petBodyIntensity < 0.25f) {
             float boost = std::min(1.0f, (mouseSpeed - 1500.0f) / 1800.0f);
             huntIntensity.target = std::min(1.0f, huntIntensity.target + (0.40f + boost * 1.25f) * dt);
             sleepiness = 0.0f;
@@ -411,6 +524,50 @@ public:
         }
         huntIntensity.step(dt, 85.0f, 16.0f);
         float hunt = std::clamp(huntIntensity.value, 0.0f, 1.0f);
+
+        if (!isScruffDragging_ && dizzyTimer_ <= 0.0f && hunt > 0.42f) {
+            fastMouseDuration_ += dt;
+            if (fastMouseDuration_ >= 10.0f) {
+                dizzyTimer_ = 6.0f;
+                fastMouseDuration_ = 0.0f;
+                huntIntensity.target = 0.0f;
+                sleepiness = 0.0f;
+            }
+        } else if (dizzyTimer_ <= 0.0f) {
+            fastMouseDuration_ = std::max(0.0f, fastMouseDuration_ - dt * 1.5f);
+        }
+        if (dizzyTimer_ > 0.0f) {
+            dizzyTimer_ = std::max(0.0f, dizzyTimer_ - dt);
+            dizzyIntensity.target = 1.0f;
+            dizzyPhase += dt * 7.5f;
+        } else if (fastMouseDuration_ > 6.8f) {
+            // Stage 2 (6.8s -> 10.0s): Pre-dizzy warning — stars appear first, then spiral eyes & upright wobble!
+            float pre = std::min(1.0f, (fastMouseDuration_ - 6.8f) / 3.2f);
+            dizzyIntensity.target = pre * 0.48f;
+            dizzyPhase += dt * 7.5f;
+        } else {
+            dizzyIntensity.target = 0.0f;
+        }
+        dizzyIntensity.step(dt, 75.0f, 14.0f);
+        float dizzy = std::clamp(dizzyIntensity.value, 0.0f, 1.0f);
+
+        scruffDrag.target = isScruffDragging_ ? 1.0f : 0.0f;
+        scruffSwing.target = isScruffDragging_ ? std::clamp(-scruffDragDx_ * 0.018f, -0.34f, 0.34f) : 0.0f;
+        scruffDragDx_ *= 0.82f;
+        scruffDrag.step(dt, 170.0f, 16.0f);
+        scruffSwing.step(dt, 110.0f, 10.0f);
+        float scruff = std::clamp(scruffDrag.value, 0.0f, 1.0f);
+
+        lieIntensity.target = (!isScruffDragging_ && dizzyTimer_ <= 0.0f && sleepiness > 0.65f)
+            ? std::min(1.0f, (sleepiness - 0.65f) / 0.30f) : 0.0f;
+        lieIntensity.step(dt, 55.0f, 14.0f);
+        float lie = std::clamp(lieIntensity.value, 0.0f, 1.0f);
+
+        float kpmVal = (float)engine.currentKPM();
+        angerIntensity.target = (!isScruffDragging_ && dizzyTimer_ <= 0.0f && kpmVal >= 240.0f)
+            ? std::min(1.0f, (kpmVal - 240.0f) / 140.0f) : 0.0f;
+        angerIntensity.step(dt, 70.0f, 14.0f);
+        float anger = std::clamp(angerIntensity.value, 0.0f, 1.0f);
 
         // 3. Limb assignment (Left Paw, Right Paw, 3-Key Hind Foot!)
         constexpr double tapHoldWindow = 0.14;
@@ -473,34 +630,98 @@ public:
 
         Pt liveMouse = { MouseBaseCenter.x + mouseOffset.point().x, MouseBaseCenter.y + mouseOffset.point().y };
 
-        if (leftKey != PhysicalKey::None) {
-            leftPaw.setTarget(KeyboardLayout::canvasPointForKey(leftKey));
-            leftPawTyping = true;
-            leftPawOnMouse = false;
-        } else if (mouseRecent && sleepiness < 0.3f) {
-            leftPaw.setTarget({ liveMouse.x + 2.0f, liveMouse.y - 3.0f });
-            leftPawTyping = false;
-            leftPawOnMouse = true;
+        isTabletActive = (settings.tabletMode == 1) || (settings.tabletMode == 0 && engine.isTabletConnected());
+        if (isTabletActive) {
+            RECT monRect = { 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN) };
+            HMONITOR hm = MonitorFromPoint(engine.lastCursorPos, MONITOR_DEFAULTTONEAREST);
+            MONITORINFO mi = {}; mi.cbSize = sizeof(mi);
+            if (hm && GetMonitorInfoW(hm, &mi)) monRect = mi.rcMonitor;
+            float mw = std::max(1.0f, (float)(monRect.right - monRect.left));
+            float mh = std::max(1.0f, (float)(monRect.bottom - monRect.top));
+            float nx = std::clamp((float)(engine.lastCursorPos.x - monRect.left) / mw, 0.0f, 1.0f);
+            float ny = std::clamp((float)(engine.lastCursorPos.y - monRect.top) / mh, 0.0f, 1.0f);
+            tabletNib.setTarget(tabletQuadPoint(0.25f + nx * 0.64f, 0.16f + ny * 0.68f));
+            tabletNib.step(dt, 240.0f, 20.0f);
+            tabletPenPress.target = engine.leftMouseDown ? 0.88f : 0.0f;
+            tabletPenPress.step(dt, 360.0f, 22.0f);
+            tabletPenTilt.target = std::clamp(engine.mouseVelocity.x * 0.00018f, -0.22f, 0.22f);
+            tabletPenTilt.step(dt, 120.0f, 14.0f);
         } else {
-            leftPaw.setTarget(LeftPawRest);
-            leftPawTyping = false;
-            leftPawOnMouse = false;
+            tabletPenPress.target = 0.0f;
+            tabletPenPress.step(dt, 300.0f, 22.0f);
+        }
+        for (int i = (int)tabletTrail.size() - 1; i >= 0; --i) {
+            tabletTrail[i].age += dt;
+            if (tabletTrail[i].age >= 0.72f) tabletTrail.erase(tabletTrail.begin() + i);
         }
 
-        if (rightKey != PhysicalKey::None) {
-            rightPaw.setTarget(KeyboardLayout::canvasPointForKey(rightKey));
-            rightPawTyping = true;
-        } else {
-            rightPaw.setTarget(RightPawRest);
+        if (scruff > 0.25f) {
+            float sway = scruffSwing.value * 28.0f;
+            float kick = std::sin(time * 9.0f) * 3.5f * scruff;
+            leftPaw.setTarget({ SeatAnchor.x - 16.0f + sway, 198.0f + kick });
+            rightPaw.setTarget({ SeatAnchor.x + 16.0f + sway, 200.0f - kick });
+            hindFoot.setTarget({ SeatAnchor.x + 12.0f + sway * 1.2f, 224.0f });
+            hindFootActive.target = 0.0f;
+            leftPawTyping = false;
             rightPawTyping = false;
-        }
-
-        if (footKey != PhysicalKey::None) {
-            hindFoot.setTarget(KeyboardLayout::canvasPointForKey(footKey));
-            hindFootActive.target = 1.0f;
-        } else {
+            leftPawOnMouse = false;
+        } else if (dizzy > 0.35f) {
+            leftPaw.setTarget(LeftPawRest);
+            rightPaw.setTarget(RightPawRest);
             hindFoot.setTarget(HindFootRest);
             hindFootActive.target = 0.0f;
+            leftPawTyping = false;
+            rightPawTyping = false;
+            leftPawOnMouse = false;
+        } else if (lie > 0.45f) {
+            leftPaw.setTarget(LeftPawRest);
+            rightPaw.setTarget(RightPawRest);
+            hindFoot.setTarget(HindFootRest);
+            hindFootActive.target = 0.0f;
+            leftPawTyping = false;
+            rightPawTyping = false;
+            leftPawOnMouse = false;
+        } else {
+            if (leftKey != PhysicalKey::None) {
+                leftPaw.setTarget(KeyboardLayout::canvasPointForKey(leftKey));
+                leftPawTyping = true;
+                leftPawOnMouse = false;
+            } else if (mouseRecent && sleepiness < 0.3f) {
+                if (isTabletActive) {
+                    Pt nib = tabletNib.point();
+                    leftPaw.setTarget({ nib.x + 6.0f, nib.y - 7.0f });
+                    if (engine.leftMouseDown) {
+                        if (tabletTrail.empty() || std::hypot(nib.x - tabletTrail.back().point.x, nib.y - tabletTrail.back().point.y) >= 1.8f) {
+                            tabletTrail.push_back({ nib, 0.0f });
+                            if (tabletTrail.size() > 28) tabletTrail.erase(tabletTrail.begin());
+                        }
+                    }
+                } else {
+                    leftPaw.setTarget({ liveMouse.x + 2.0f, liveMouse.y - 3.0f });
+                }
+                leftPawTyping = false;
+                leftPawOnMouse = true;
+            } else {
+                leftPaw.setTarget(LeftPawRest);
+                leftPawTyping = false;
+                leftPawOnMouse = false;
+            }
+
+            if (rightKey != PhysicalKey::None) {
+                rightPaw.setTarget(KeyboardLayout::canvasPointForKey(rightKey));
+                rightPawTyping = true;
+            } else {
+                rightPaw.setTarget(RightPawRest);
+                rightPawTyping = false;
+            }
+
+            if (footKey != PhysicalKey::None) {
+                hindFoot.setTarget(KeyboardLayout::canvasPointForKey(footKey));
+                hindFootActive.target = 1.0f;
+            } else {
+                hindFoot.setTarget(HindFootRest);
+                hindFootActive.target = 0.0f;
+            }
         }
 
         // Count held physical keys, never key-repeat events or mouse buttons.
@@ -554,10 +775,12 @@ public:
             targetBodyTilt = (avgX - 184.0f) * 0.0011f;
         }
         bodyShiftX.target = std::clamp(targetShiftX, -16.0f, 16.0f);
-        bodyTilt.target = std::clamp(targetBodyTilt, -0.12f, 0.12f);
-        bodySquash.target = 1.0f - hunt * 0.11f;
-        headOffsetY.target = (leftPawTyping || rightPawTyping) ? 3.5f : (sleepiness * 5.0f + hunt * 10.5f);
-        earFold.target = std::max(petHeadIntensity * 0.7f, petBodyIntensity * 0.45f) + sleepiness * 0.25f - hunt * 0.18f;
+        bodyTilt.target = std::clamp(targetBodyTilt, -0.12f, 0.12f) + scruffSwing.value * scruff;
+        bodySquash.target = 1.0f - hunt * 0.11f + scruff * 0.16f;
+        headOffsetY.target = ((leftPawTyping || rightPawTyping) ? 3.5f : (sleepiness * 5.0f + hunt * 10.5f))
+            - scruff * 10.0f;
+        earFold.target = std::max(petHeadIntensity * 0.7f, petBodyIntensity * 0.45f) + sleepiness * 0.25f - hunt * 0.18f
+            + scruff * 0.35f + anger * 0.45f + dizzy * 0.35f;
         earTwitch.target = 0.0f;
 
         bodyShiftX.step(dt, 140.0f, 18.0f);
@@ -607,7 +830,7 @@ public:
         headPitch.step(dt, headStiff, headDamp);
 
         if (now - lastPetTime_ > 0.28) {
-            headTilt.target = bodyTilt.target * 0.45f + headYaw.value * (0.11f + hunt * 0.05f) - headYaw.value * headPitch.value * 0.04f;
+            headTilt.target = bodyTilt.target * 0.45f + headYaw.value * (0.11f + hunt * 0.05f) - headYaw.value * headPitch.value * 0.04f + lie * 0.12f;
         }
         headTilt.step(dt, 130.0f, 16.0f);
 
@@ -641,7 +864,7 @@ public:
         float kpmBoost = std::min(2.4f, (float)engine.currentKPM() / 160.0f);
         float petBoost = std::max(petHeadIntensity, petBodyIntensity) * 1.4f;
         float agilityBoost = std::clamp(tailAgility.value, 0.0f, 1.0f) * 3.2f;
-        float tailSpeed = 1.85f + kpmBoost + petBoost + hunt * 2.8f + agilityBoost - sleepiness * 1.1f;
+        float tailSpeed = 1.85f + kpmBoost + petBoost + hunt * 2.8f + anger * 3.5f + agilityBoost - sleepiness * 1.1f;
         tailPhase += dt * tailSpeed;
 
         // 8. Keycap glow decay

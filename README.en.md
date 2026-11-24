@@ -1,7 +1,7 @@
 # 🐱 KuroCat — Full-State Keyboard & Mouse Desktop Cat Pet (macOS / Windows / Linux / UOS)
 
 <p align="center">
-  <a href="README.md">简体中文</a> | <b>English</b>
+  <a href="README.md">简体中文</a> Fork of [chanke17/KuroCat](https://github.com/chanke17/KuroCat). v1.4.1 integrates upstream v1.4.0 features including custom skins, the dressing room, new poses and expressions, tablet support, mirroring and OBS options. This fork retains its orange-eye icon, approved Shorthair / Orange & White pure-white arms and shoulder attachment, facial artwork and paired eye colors. No in-app updater; download manually from [this fork’s Releases](https://github.com/andyforfun168/KuroCatAndy/releases/latest).
 </p>
 
 <p align="center">
@@ -42,6 +42,13 @@
   - RGB marquee lighting and the exactly-four-keys tail-press easter egg are enabled by default, with separate menu switches. The three-key foot action remains available.
   - Moving the cursor near the tail makes it flick away and spring back.
   - v1.3.8 also includes macOS/Linux stuck-key recovery and the Windows Alt/right-click menu fix, while retaining this fork's orange-eye icon, paired skin eye colors and manual Release downloads.
+
+
+- **🆕 v1.4.1 features**
+  - Import / export custom `.kurocat` skins in the dressing room; see the [skin format guide](docs/skin-format.md).
+  - Yawning, curled sleeping, fast-typing anger and mouse-shaking dizziness; graphics tablet and stylus modes.
+  - Horizontal mirroring, OBS capture options, edit mode, language options and fullscreen auto-hide, with upstream platform fixes.
+  - The approved pure-white arms and shoulder attachment remain on Shorthair and Orange & White, including their exported templates.
 
 ### 6-State Preview of All 4 Skins
 
