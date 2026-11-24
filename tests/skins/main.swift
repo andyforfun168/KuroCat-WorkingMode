@@ -189,13 +189,20 @@ for coat in [CatCoatTheme.shorthair,.orangeWhite] {
  let old=PointyChinRendererPatterns.marks(for:coat)
  let body=now.filter{!$0.head},oldBody=old.filter{!$0.head}
  precondition(body.count==oldBody.count)
- for (a,b) in zip(body,oldBody) {precondition(a.points==b.points && a.rgb==b.rgb && a.width==b.width && a.alpha==b.alpha,"Original body coat artwork changed")}
+ for (index,pair) in zip(body,oldBody).enumerated() {
+ let (a,b)=pair
+ if coat == .orangeWhite && index == 0 {
+  precondition(Array(a.points.prefix(25)) == Array(b.points.prefix(25)),"Rounded inner body-spot boundary changed")
+  precondition(a.points.map{$0.x}.max()! > 80,"Outer orange spot does not bleed beyond silhouette")
+  continue
+ }
+ precondition(a.points==b.points && a.rgb==b.rgb && a.width==b.width && a.alpha==b.alpha,"Original body coat artwork changed")}
  let patterns=now.filter{$0.head && !$0.skull && $0.rgb != 0xF2EEE4}
  let oldPatterns=old.filter{$0.head && !$0.skull && $0.rgb != 0xF2EEE4}
  precondition(patterns.count==oldPatterns.count)
  for (a,b) in zip(patterns,oldPatterns) {precondition(a.points==b.points && a.rgb==b.rgb && a.width==b.width && a.alpha==b.alpha,"Original head pattern changed")}
 }
-print("PASS: original body spots, tabby stripes and forehead pattern geometry preserved")
+print("PASS: rounded body-spot inner edges, tabby stripes and forehead preserved; right outer spot covers silhouette")
 
 let rightDown=pixels(frame(.orangeWhite,.referenceHazel,10))
 for y in 313...315 {for x in 429...431 {
