@@ -30,7 +30,12 @@ def artwork(silver):
             stroke(m,False,(side*49,-41),(side*37,-44),(side*33,-35),3.5,DARK,.75)
             stroke(m,False,(side*49,-20),(side*39,-25),(side*35,-14),3.2,DARK,.75)
     else:
-        shape(m,False,(51,-73),[((29,-38),(23,-76),(21,-59)),((47,4),(35,-16),(20,4))],GINGER)
+        # Keep the rounded inner edge; extend the hidden outer edge past the
+        # silhouette so head turns and breathing cannot expose a white sliver.
+        shape(m,False,(51,-73),[
+            ((29,-38),(23,-76),(21,-59)),((47,4),(35,-16),(20,4)),
+            ((85,20),(60,12),(75,20)),((85,-95),(85,-15),(85,-70)),
+            ((51,-73),(72,-95),(61,-82))],GINGER)
         ellipse(m,False,(-59,-65,28,51),GINGER)
         # Skull-attached orange volume: its edges lie beyond the clipped cat silhouette.
         # The curved nape stays orange when the facial markings turn away.
