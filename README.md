@@ -141,16 +141,6 @@ KuroCat 的所有键盘与鼠标硬件信号**仅在本地内存实时驱动桌�
 
 已下载 v1.3.0 或更早版本的用户，需要先手动升级到 v1.3.1，之后才能收到应用内更新提醒。
 
-## Contributors
-
-感谢原作者和贡献者：
-
-| [<img src="https://github.com/chanke17.png?size=96" width="64" alt="chanke17"/><br/>chanke17](https://github.com/chanke17) | [<img src="https://github.com/andyforfun168.png?size=96" width="64" alt="andyforfun168"/><br/>andyforfun168](https://github.com/andyforfun168) |
-| :---: | :---: |
-| KuroCat 原作者，核心功能与持续维护 | 本 fork 维护，美短 / 橘白皮肤、绘制修复、橙眼图标与更新提醒 |
-
-[查看本仓库贡献记录](https://github.com/andyforfun168/KuroCatAndy/graphs/contributors) · [原项目](https://github.com/chanke17/KuroCat)
-
 ## 📄 License
 
 [MIT License](LICENSE)

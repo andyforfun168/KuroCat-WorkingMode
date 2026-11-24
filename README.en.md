@@ -140,16 +140,6 @@ Update checks read public release metadata from this fork's GitHub Release API, 
 
 Users on v1.3.0 or earlier must upgrade manually once to receive in-app update notices.
 
-## Contributors
-
-Thanks to the original author and contributors:
-
-| [<img src="https://github.com/chanke17.png?size=96" width="64" alt="chanke17"/><br/>chanke17](https://github.com/chanke17) | [<img src="https://github.com/andyforfun168.png?size=96" width="64" alt="andyforfun168"/><br/>andyforfun168](https://github.com/andyforfun168) |
-| :---: | :---: |
-| Original KuroCat author, core features and maintenance | Fork maintainer; Shorthair / Orange & White skins, rendering fixes, orange-eye icon and update notices |
-
-[Fork contribution history](https://github.com/andyforfun168/KuroCatAndy/graphs/contributors) · [Upstream project](https://github.com/chanke17/KuroCat)
-
 ## 📄 License
 
 [MIT License](LICENSE)
