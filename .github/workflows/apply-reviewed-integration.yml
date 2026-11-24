@@ -1,0 +1,68 @@
+name: Apply reviewed integration
+on:
+  workflow_dispatch:
+    inputs:
+      plan:
+        description: Reviewed change set
+        type: choice
+        required: true
+        options:
+          - fork-release
+          - skins-only
+permissions:
+  contents: read
+jobs:
+  apply:
+    if: github.repository == 'andyforfun168/KuroCatAndy'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      PLAN: ${{ inputs.plan }}
+      UPSTREAM: e30e0c15209939d1aee4f2692c8e9e422050fb1b
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create branch from verified patch and preserve upstream history
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$PLAN" in
+            fork-release)
+              PATCH=scripts/integration-fork-v136.patch
+              EXPECTED=119d2fd7b93972b7f2398f0c7cb1f50455dadde70671c1b99dd80089eaafb5c7
+              TARGET=codex/release-v1.3.6-approved
+              BASE="$GITHUB_SHA"
+              ;;
+            skins-only)
+              PATCH=scripts/integration-skins-v136.patch
+              EXPECTED=113e3e18f39170a9825e77e071d7f158f0f1b511965d49d3002af576ebde6b18
+              TARGET=codex/approved-coats-pink-muzzles
+              BASE="$UPSTREAM"
+              ;;
+            *) exit 1 ;;
+          esac
+          git show "$GITHUB_SHA:$PATCH" > /tmp/reviewed.patch
+          echo "$EXPECTED  /tmp/reviewed.patch" | sha256sum --check
+          git fetch https://github.com/chanke17/KuroCat.git main
+          git cat-file -e "$UPSTREAM^{commit}"
+          git switch -c "$TARGET" "$BASE"
+          git apply --check /tmp/reviewed.patch
+          git apply --index /tmp/reviewed.patch
+          git rm --ignore-unmatch scripts/integration-fork-v136.patch scripts/integration-skins-v136.patch
+          git diff --cached --check
+          TREE=$(git write-tree)
+          if [[ "$PLAN" == skins-only ]]; then
+            test "$TREE" = 14bb5ae22305919341fee274ed735c68ac4f36b3
+          fi
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR_ID+$GITHUB_ACTOR@users.noreply.github.com"
+          if [[ "$BASE" == "$UPSTREAM" ]]; then
+            COMMIT=$(git commit-tree "$TREE" -p "$BASE" -m "Add approved shorthair and orange-white artwork with projected pink muzzles")
+          else
+            COMMIT=$(git commit-tree "$TREE" -p "$BASE" -p "$UPSTREAM" -m "Merge selected upstream features and approved coats; release v1.3.6 without in-app updates")
+          fi
+          git update-ref "refs/heads/$TARGET" "$COMMIT"
+          git push origin "refs/heads/$TARGET:refs/heads/$TARGET"
+          echo "Created $TARGET at $COMMIT" >> "$GITHUB_STEP_SUMMARY"
