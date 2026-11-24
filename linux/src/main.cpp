@@ -7,13 +7,32 @@
 #include <fstream>
 #include <limits.h>
 #include <string>
+#include <thread>
+#include <vector>
 #include <algorithm>
 #include <unistd.h>
 #include "KeyMap.hpp"
 #include "InputEngine.hpp"
 #include "CatPhysics.hpp"
 #include "CatRenderer.hpp"
-#include "UpdateChecker.hpp"
+
+#include <sys/stat.h>
+#include <sys/file.h>
+#include <sys/types.h>
+#include <cstdlib>
+#include <cstring>
+#include <cctype>
+#include <csignal>
+#include <cerrno>
+#include <dirent.h>
+#include <fcntl.h>
+#include <glib-unix.h>
+
+#define KUROCAT_VERSION_STR "1.3.6"
+static constexpr const char* APP_VERSION = KUROCAT_VERSION_STR;
+// Other KuroCat builds scan installed binaries for this marker (see readBinaryVersion) to find the
+// newest copy WITHOUT executing it. Always derived from KUROCAT_VERSION_STR.
+__attribute__((used)) static const char kVersionMarker[] = "KUROCAT_VERSION=" KUROCAT_VERSION_STR;
 
 struct LinuxApp {
     GtkWidget* window = nullptr;
@@ -39,9 +58,189 @@ struct LinuxApp {
     bool demoActive = false;
     double demoStartTime = 0.0;
     int demoStepIdx = 0;
+
+
+    // Cached window geometry (updated from configure-event). Querying it from the X server every
+    // frame cost several synchronous round-trips per frame.
+    int winX = 0, winY = 0, winW = 360, winH = 320;
+    double lastGeometryRefresh = 0.0;
 };
 
 static LinuxApp* g_app = nullptr;
+static int g_lockFd = -1;
+static guint g_frameIntervalMs = 0;
+
+// MARK: - Versions of installed copies / single instance
+
+static int versionToNumber(const std::string& v) {
+    int parts[3] = { 0, 0, 0 };
+    int idx = 0;
+    for (char c : v) {
+        if (c >= '0' && c <= '9') parts[idx] = parts[idx] * 10 + (c - '0');
+        else if (c == '.') { if (++idx >= 3) break; }
+        else if (c != 'v' && c != 'V') break;
+    }
+    return parts[0] * 10000 + parts[1] * 100 + parts[2];
+}
+
+/// Reads the version baked into a kurocat binary without running it (0 = unknown / not kurocat).
+/// New builds carry "KUROCAT_VERSION=x.y.z"; builds up to 1.3.2 only contain "KuroCat/x.y.z"
+/// (their HTTP User-Agent).
+static int readBinaryVersion(const std::string& path) {
+    struct stat st{};
+    if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0 || st.st_size > 64 * 1024 * 1024) return 0;
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return 0;
+    std::string data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    auto scan = [&](const std::string& needle) -> int {
+        size_t pos = 0;
+        while ((pos = data.find(needle, pos)) != std::string::npos) {
+            size_t p = pos + needle.size();
+            if (p < data.size() && std::isdigit((unsigned char)data[p])) {
+                size_t e = p;
+                while (e < data.size() && (std::isdigit((unsigned char)data[e]) || data[e] == '.')) e++;
+                return versionToNumber(data.substr(p, e - p));
+            }
+            pos = p;
+        }
+        return 0;
+    };
+    int v = scan(std::string("KUROCAT_") + "VERSION=");
+    if (v == 0) v = scan(std::string("KuroCat") + "/");
+    return v;
+}
+
+static std::string homeDir() {
+    const char* home = std::getenv("HOME");
+    return std::string(home && home[0] ? home : "/tmp");
+}
+
+static std::string userLocalBinPath() {
+    return homeDir() + "/.local/bin/kurocat";
+}
+
+static std::string resolvedPath(const std::string& p) {
+    char buf[PATH_MAX] = {0};
+    if (realpath(p.c_str(), buf)) return std::string(buf);
+    return p;
+}
+
+/// Password-free updates install into ~/.local/bin while a .deb copy may still sit in /usr/bin
+/// (and vice-versa after a later .deb upgrade). Whatever launcher was used — menu entry,
+/// autostart, terminal — always run the NEWEST installed copy, so an old copy can't keep
+/// popping up "new version available" after the user already updated.
+static void redirectToNewestInstalledCopy(char** argv) {
+    char selfBuf[PATH_MAX] = {0};
+    ssize_t n = readlink("/proc/self/exe", selfBuf, sizeof(selfBuf) - 1);
+    std::string self = n > 0 ? std::string(selfBuf, (size_t)n) : std::string();
+    int best = versionToNumber(APP_VERSION);
+    std::string bestPath;
+    const std::string candidates[] = { userLocalBinPath(), "/usr/bin/kurocat", "/usr/local/bin/kurocat" };
+    for (const auto& c : candidates) {
+        if (access(c.c_str(), X_OK) != 0) continue;
+        std::string real = resolvedPath(c);
+        if (real == self) continue;
+        int v = readBinaryVersion(real);
+        if (v > best) { best = v; bestPath = real; }
+    }
+    if (bestPath.empty()) return;
+    setenv("KUROCAT_NO_REDIRECT", "1", 1);
+    execv(bestPath.c_str(), argv);
+    // exec failed: keep running this copy
+}
+
+static std::string lockFilePath() {
+    const char* rt = std::getenv("XDG_RUNTIME_DIR");
+    std::string dir = (rt && rt[0] && access(rt, W_OK) == 0) ? std::string(rt) : std::string("/tmp");
+    return dir + "/kurocat-" + std::to_string((long)getuid()) + ".lock";
+}
+
+static bool waitForPidExit(pid_t pid, int timeoutMs) {
+    for (int waited = 0; waited <= timeoutMs; waited += 100) {
+        if (kill(pid, 0) != 0 && errno == ESRCH) return true;
+        usleep(100 * 1000);
+    }
+    return false;
+}
+
+/// Builds <= 1.3.2 had no single-instance lock at all, so a freshly installed version would run
+/// NEXT to the old one (two cats, and the old one still nagging about updates). Find them via
+/// /proc (same user, process name "kurocat") and stop them.
+static void terminateLegacyInstances() {
+    pid_t self = getpid();
+    uid_t uid = getuid();
+    std::vector<pid_t> victims;
+    if (DIR* d = opendir("/proc")) {
+        while (struct dirent* ent = readdir(d)) {
+            if (!std::isdigit((unsigned char)ent->d_name[0])) continue;
+            pid_t pid = (pid_t)std::atol(ent->d_name);
+            if (pid <= 1 || pid == self) continue;
+            std::string base = std::string("/proc/") + ent->d_name;
+            struct stat st{};
+            if (stat(base.c_str(), &st) != 0 || st.st_uid != uid) continue;
+            std::ifstream comm(base + "/comm");
+            std::string name;
+            std::getline(comm, name);
+            if (name == "kurocat") victims.push_back(pid);
+        }
+        closedir(d);
+    }
+    for (pid_t v : victims) kill(v, SIGTERM);
+    for (pid_t v : victims) {
+        if (!waitForPidExit(v, 3000)) kill(v, SIGKILL);
+    }
+}
+
+static bool claimLock(int fd) {
+    if (flock(fd, LOCK_EX | LOCK_NB) != 0) return false;
+    std::string content = std::to_string((long)getpid()) + " " + std::to_string(versionToNumber(APP_VERSION)) + "\n";
+    if (ftruncate(fd, 0) == 0) {
+        ssize_t w = pwrite(fd, content.data(), content.size(), 0);
+        (void)w;
+    }
+    g_lockFd = fd;
+    return true;
+}
+
+/// Returns false when this process should exit because an equal/newer KuroCat is already running
+/// (that one is woken up instead: shown again, click-through cancelled, menu opened).
+static bool acquireSingleInstance() {
+    int fd = open(lockFilePath().c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    if (fd < 0) return true; // can't lock (odd /tmp setup): never block startup over it
+    if (claimLock(fd)) {
+        terminateLegacyInstances();
+        return true;
+    }
+    char buf[64] = {0};
+    ssize_t r = pread(fd, buf, sizeof(buf) - 1, 0);
+    (void)r;
+    long otherPid = 0;
+    int otherVer = 0;
+    std::sscanf(buf, "%ld %d", &otherPid, &otherVer);
+    if (otherPid <= 0 || otherVer >= versionToNumber(APP_VERSION)) {
+        if (otherPid > 0) kill((pid_t)otherPid, SIGUSR1);
+        close(fd);
+        return false;
+    }
+    kill((pid_t)otherPid, SIGTERM); // older KuroCat: replace it
+    for (int i = 0; i < 50; ++i) {
+        usleep(100 * 1000);
+        if (claimLock(fd)) {
+            terminateLegacyInstances();
+            return true;
+        }
+    }
+    kill((pid_t)otherPid, SIGUSR1);
+    close(fd);
+    return false;
+}
+
+static void releaseSingleInstance() {
+    if (g_lockFd >= 0) {
+        close(g_lockFd);
+        g_lockFd = -1;
+    }
+}
 
 // MARK: - Launch at Login (Freedesktop XDG Autostart: Ubuntu/Debian/Deepin/统信 UOS/KDE/GNOME)
 
@@ -232,17 +431,30 @@ static void showPopupMenu(LinuxApp& app, GdkEventButton* evt) {
         setAutoStartEnabled(gtk_check_menu_item_get_active(item));
     }));
 
+    addCheck("高帧率 60fps（电脑卡顿时请关闭）", app.settings.highFrameRate, G_CALLBACK(+[](GtkCheckMenuItem* item, gpointer) {
+        g_app->settings.highFrameRate = gtk_check_menu_item_get_active(item);
+        g_app->settings.save();
+    }));
+
     addSep();
 
     addCheck("显示按键气泡 ([S] [W] [⇧])", app.settings.showKeyBadges, G_CALLBACK(+[](GtkCheckMenuItem* item, gpointer) {
         g_app->settings.showKeyBadges = gtk_check_menu_item_get_active(item);
         g_app->settings.save();
     }));
+    addCheck("显示鼠标点击气泡 ([左键] [右键])", app.settings.showMouseBadges, G_CALLBACK(+[](GtkCheckMenuItem* item, gpointer) {
+        g_app->settings.showMouseBadges = gtk_check_menu_item_get_active(item);
+        g_app->settings.save();
+    }));
+    addCheck("显示键盘字符", app.settings.showKeyLegends, G_CALLBACK(+[](GtkCheckMenuItem* item, gpointer) {
+        g_app->settings.showKeyLegends = gtk_check_menu_item_get_active(item);
+        g_app->settings.save();
+    }));
     addCheck("3键同时按「用脚按」彩蛋 🐾", app.settings.footEasterEgg, G_CALLBACK(+[](GtkCheckMenuItem* item, gpointer) {
         g_app->settings.footEasterEgg = gtk_check_menu_item_get_active(item);
         g_app->settings.save();
     }));
-    addCheck("摸头/摸背闭眼互动", app.settings.petInteraction, G_CALLBACK(+[](GtkCheckMenuItem* item, gpointer) {
+    addCheck("摸头闭眼互动", app.settings.petInteraction, G_CALLBACK(+[](GtkCheckMenuItem* item, gpointer) {
         g_app->settings.petInteraction = gtk_check_menu_item_get_active(item);
         g_app->settings.save();
     }));
@@ -349,13 +561,8 @@ static void showPopupMenu(LinuxApp& app, GdkEventButton* evt) {
         applyWindowScaleAndPos(*g_app, false);
     }));
     addSep();
-    addAction("检查更新…",G_CALLBACK(+[](GtkMenuItem*,gpointer){KuroLinuxUpdate::check(true);}));
-    GtkWidget* autoUpdate=gtk_check_menu_item_new_with_label("自动检查更新（每天一次）");
-    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(autoUpdate),KuroLinuxUpdate::automatic());
-    g_signal_connect(autoUpdate,"activate",G_CALLBACK(+[](GtkMenuItem*,gpointer){KuroLinuxUpdate::toggle();}),nullptr);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu),autoUpdate);
-    addSep();
     addAction("退出 KuroCat", G_CALLBACK(+[](GtkMenuItem*, gpointer) {
+        releaseSingleInstance();
         gtk_main_quit();
     }));
 
@@ -419,28 +626,68 @@ static gboolean onButtonRelease(GtkWidget*, GdkEventButton* evt, gpointer) {
     return FALSE;
 }
 
+static void refreshWindowGeometry(LinuxApp& app) {
+    if (!app.window) return;
+    gtk_window_get_position(GTK_WINDOW(app.window), &app.winX, &app.winY);
+    gtk_window_get_size(GTK_WINDOW(app.window), &app.winW, &app.winH);
+    app.lastGeometryRefresh = nowSeconds();
+}
+
+/// Adaptive frame pacing. The old fixed 60fps redraw of a translucent always-on-top window made
+/// software-composited desktops (统信 UOS / 麒麟 on weak or 国产 GPUs, VMs) so slow that only
+/// typing still worked. Now: 30fps while the user is typing/moving/petting, 20fps when idle,
+/// 10fps when the cat is asleep, 4fps when hidden. "高帧率 60fps" in the menu restores 60fps.
+static guint desiredFrameIntervalMs(const LinuxApp& app) {
+    if (!app.isVisible) return 250;
+    if (app.settings.highFrameRate) return 16;
+    double now = nowSeconds();
+    bool busy = app.isDragging || app.demoActive || !app.input.activeKeys.empty()
+        || app.input.leftMouseDown || app.input.rightMouseDown
+        || (now - app.input.lastAnyInputTime()) < 2.5
+        || !app.physics.floatingKeycaps.empty()
+        || app.physics.petHeadIntensity > 0.02f || app.physics.petBodyIntensity > 0.02f;
+    if (busy) return 33;
+    if (app.physics.sleepiness > 0.6f) return 100;
+    return 50;
+}
+
+static gboolean onFrameTick(gpointer);
+
+static void scheduleFrames(guint intervalMs) {
+    g_frameIntervalMs = intervalMs;
+    g_timeout_add(intervalMs, onFrameTick, nullptr);
+}
+
 static gboolean onFrameTick(gpointer) {
-    if (!g_app || !g_app->isVisible) return G_SOURCE_CONTINUE;
+    if (!g_app) return G_SOURCE_REMOVE;
+    if (!g_app->isVisible) {
+        guint want = desiredFrameIntervalMs(*g_app);
+        if (want != g_frameIntervalMs) { scheduleFrames(want); return G_SOURCE_REMOVE; }
+        return G_SOURCE_CONTINUE;
+    }
 
     double now = nowSeconds();
     float dt = (float)(now - g_app->lastTickTime);
     g_app->lastTickTime = now;
-    if (dt <= 0.0f || dt > 0.2f) dt = 1.0f / 60.0f;
+    if (dt <= 0.0f || dt > 0.5f) dt = 1.0f / 30.0f;
 
-    // Fallback GDK cursor query (for Wayland / non-X11) + Alt-key hold check
+    // Fallback GDK cursor query + Alt check — only needed without XInput2 (Wayland / no XI2).
+    // With XI2 the input thread already tracks the cursor, so skip these two X round-trips per frame.
     float fbX = 0.0f, fbY = 0.0f;
     bool hasFb = false;
     bool gdkAltHeld = false;
-    if (GdkDisplay* dpy = gdk_display_get_default()) {
-        if (GdkSeat* seat = gdk_display_get_default_seat(dpy)) {
-            if (GdkDevice* ptr = gdk_seat_get_pointer(seat)) {
-                gint gx = 0, gy = 0;
-                gdk_device_get_position(ptr, nullptr, &gx, &gy);
-                fbX = (float)gx; fbY = (float)gy; hasFb = true;
-                if (GdkWindow* gw = gtk_widget_get_window(g_app->window)) {
-                    GdkModifierType mask = (GdkModifierType)0;
-                    gdk_window_get_device_position(gw, ptr, nullptr, nullptr, &mask);
-                    if (mask & GDK_MOD1_MASK) gdkAltHeld = true;
+    if (!g_app->input.isXI2Active) {
+        if (GdkDisplay* dpy = gdk_display_get_default()) {
+            if (GdkSeat* seat = gdk_display_get_default_seat(dpy)) {
+                if (GdkDevice* ptr = gdk_seat_get_pointer(seat)) {
+                    gint gx = 0, gy = 0;
+                    gdk_device_get_position(ptr, nullptr, &gx, &gy);
+                    fbX = (float)gx; fbY = (float)gy; hasFb = true;
+                    if (GdkWindow* gw = gtk_widget_get_window(g_app->window)) {
+                        GdkModifierType mask = (GdkModifierType)0;
+                        gdk_window_get_device_position(gw, ptr, nullptr, nullptr, &mask);
+                        if (mask & GDK_MOD1_MASK) gdkAltHeld = true;
+                    }
                 }
             }
         }
@@ -473,9 +720,9 @@ static gboolean onFrameTick(gpointer) {
         if (g_app->demoStepIdx >= 10) g_app->demoActive = false;
     }
 
-    int winX = 0, winY = 0, winW = 360, winH = 320;
-    gtk_window_get_position(GTK_WINDOW(g_app->window), &winX, &winY);
-    gtk_window_get_size(GTK_WINDOW(g_app->window), &winW, &winH);
+    // Geometry comes from configure-event; re-sync occasionally as a safety net.
+    if (now - g_app->lastGeometryRefresh > 3.0) refreshWindowGeometry(*g_app);
+    int winX = g_app->winX, winY = g_app->winY, winW = g_app->winW, winH = g_app->winH;
 
     // Petting detection using global cursor position (works in Smart AND Full Click-Through modes!)
     if (!g_app->isDragging && winW > 0 && winH > 0) {
@@ -485,12 +732,12 @@ static gboolean onFrameTick(gpointer) {
                 (cur.x - (float)winX) / (float)winW * CatPhysics::CanvasWidth,
                 (cur.y - (float)winY) / (float)winH * CatPhysics::CanvasHeight
             };
-            CatHitZone zone = CatRenderer::hitTest(cp, g_app->physics);
-            if (zone == CatHitZone::Head || zone == CatHitZone::Body) {
+            CatHitZone zone = CatRenderer::hitTest(cp, g_app->physics, g_app->settings.coatTheme);
+            if (zone == CatHitZone::Head) {
                 if (g_app->hasLastHover) {
                     float d = std::hypot(cp.x - g_app->lastHoverCanvas.x, cp.y - g_app->lastHoverCanvas.y);
                     if (d > 1.2f && d < 80.0f) {
-                        g_app->physics.registerPetStroke(cp, d, zone == CatHitZone::Head, g_app->settings);
+                        g_app->physics.registerPetStroke(cp, d, true, g_app->settings);
                     }
                 }
                 g_app->lastHoverCanvas = cp;
@@ -503,16 +750,72 @@ static gboolean onFrameTick(gpointer) {
         }
     }
 
-    g_app->physics.step(dt, (float)winX, (float)winY, (float)winW, g_app->input, g_app->settings);
+    // Physics clamps dt to 1/25s; sub-step slower idle frames so animations keep real-time speed.
+    int substeps = std::max(1, std::min(4, (int)std::ceil(dt / 0.034f)));
+    for (int i = 0; i < substeps; ++i) {
+        g_app->physics.step(dt / (float)substeps, (float)winX, (float)winY, (float)winW, g_app->input, g_app->settings);
+    }
     gtk_widget_queue_draw(g_app->drawArea);
+
+    guint want = desiredFrameIntervalMs(*g_app);
+    if (want != g_frameIntervalMs) {
+        scheduleFrames(want);
+        return G_SOURCE_REMOVE;
+    }
+    return G_SOURCE_CONTINUE;
+}
+
+static gboolean onQuitSignal(gpointer) {
+    releaseSingleInstance();
+    gtk_main_quit();
+    return G_SOURCE_REMOVE;
+}
+
+/// SIGUSR1 = "KuroCat was launched again": show the cat, cancel full click-through, open the menu.
+static gboolean onWakeSignal(gpointer) {
+    if (!g_app || !g_app->window) return G_SOURCE_CONTINUE;
+    if (g_app->settings.fullClickThrough) {
+        g_app->settings.fullClickThrough = false;
+        g_app->settings.save();
+        updateInputShape(*g_app);
+    }
+    if (!g_app->isVisible) {
+        g_app->isVisible = true;
+        gtk_widget_show(g_app->window);
+    }
+    showPopupMenu(*g_app, nullptr);
     return G_SOURCE_CONTINUE;
 }
 
 int main(int argc, char** argv) {
+    if (argc > 1 && (std::strcmp(argv[1], "--version") == 0 || std::strcmp(argv[1], "-v") == 0)) {
+        std::printf("KuroCat %s\n", APP_VERSION);
+        return 0;
+    }
+    if (!std::getenv("KUROCAT_NO_REDIRECT")) redirectToNewestInstalledCopy(argv);
+    unsetenv("KUROCAT_NO_REDIRECT");
+
+    // The XInput2 reader runs on its own thread with its own Display. libX11 < 1.8 (统信 UOS 20,
+    // 麒麟 V10, Debian 10/11) is not thread-safe unless this is called before any other Xlib call.
+    XInitThreads();
+    // Positioning, keep-above and click-through shapes need X11 (XWayland on Wayland sessions).
+    gdk_set_allowed_backends("x11,*");
     gtk_init(&argc, &argv);
 
     LinuxApp app;
     g_app = &app;
+
+    // Install signal handlers BEFORE publishing our PID in the lock file (SIGUSR1 would otherwise
+    // kill us by default if a second launch pokes us during startup).
+    g_unix_signal_add(SIGTERM, onQuitSignal, nullptr);
+    g_unix_signal_add(SIGINT, onQuitSignal, nullptr);
+    g_unix_signal_add(SIGHUP, onQuitSignal, nullptr);
+    g_unix_signal_add(SIGUSR1, onWakeSignal, nullptr);
+    if (!acquireSingleInstance()) {
+        g_app = nullptr;
+        return 0;
+    }
+
     app.settings.load();
     if (isAutoStartEnabled()) {
         // Keep Exec path updated if user moved portable kurocat binary
@@ -520,7 +823,7 @@ int main(int argc, char** argv) {
     }
 
     app.input.onKeyDown = [&](PhysicalKey k) { app.physics.triggerKeyDown(k, app.settings); };
-    app.input.onMouseClick = [&](int btn, bool down) { app.physics.triggerMouseClick(btn, down); };
+    app.input.onMouseClick = [&](int btn, bool down) { app.physics.triggerMouseClick(btn, down, app.settings); };
     app.input.start();
 
     app.window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
@@ -541,11 +844,15 @@ int main(int argc, char** argv) {
     app.drawArea = gtk_drawing_area_new();
     gtk_container_add(GTK_CONTAINER(app.window), app.drawArea);
 
-    gtk_widget_add_events(app.window, GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK | GDK_POINTER_MOTION_MASK);
+    gtk_widget_add_events(app.window, GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK | GDK_POINTER_MOTION_MASK | GDK_STRUCTURE_MASK);
     g_signal_connect(app.drawArea, "draw", G_CALLBACK(onDraw), nullptr);
     g_signal_connect(app.window, "button-press-event", G_CALLBACK(onButtonPress), nullptr);
     g_signal_connect(app.window, "motion-notify-event", G_CALLBACK(onMotionNotify), nullptr);
     g_signal_connect(app.window, "button-release-event", G_CALLBACK(onButtonRelease), nullptr);
+    g_signal_connect(app.window, "configure-event", G_CALLBACK(+[](GtkWidget*, GdkEventConfigure*, gpointer) -> gboolean {
+        if (g_app) refreshWindowGeometry(*g_app);
+        return FALSE;
+    }), nullptr);
     g_signal_connect(app.window, "destroy", G_CALLBACK(gtk_main_quit), nullptr);
     g_signal_connect(app.window, "realize", G_CALLBACK(+[](GtkWidget* w, gpointer) {
         updateInputShape(*g_app);
@@ -575,13 +882,14 @@ int main(int argc, char** argv) {
 
     applyWindowScaleAndPos(app, false);
     gtk_widget_show_all(app.window);
+    refreshWindowGeometry(app);
 
     app.lastTickTime = nowSeconds();
-    g_timeout_add(16, onFrameTick, nullptr);
+    scheduleFrames(desiredFrameIntervalMs(app));
 
-    g_timeout_add_seconds(5,+[](gpointer)->gboolean{KuroLinuxUpdate::check(false);return G_SOURCE_REMOVE;},nullptr);
-    g_timeout_add_seconds(6*3600,+[](gpointer)->gboolean{KuroLinuxUpdate::check(false);return G_SOURCE_CONTINUE;},nullptr);
     gtk_main();
     app.input.stop();
+    releaseSingleInstance();
+    g_app = nullptr;
     return 0;
 }

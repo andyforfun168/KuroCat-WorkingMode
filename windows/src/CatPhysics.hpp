@@ -33,10 +33,13 @@ enum class EyeColorTheme : int {
 
 struct CatSettings {
     bool showKeyBadges = true;
+    bool showMouseBadges = true;
+    bool showKeyLegends = true;
     bool footEasterEgg = true;
     bool petInteraction = true;
     bool fullClickThrough = false;
     bool alwaysOnTop = true;
+    bool runAsAdmin = false; // relaunch elevated so keys typed into admin-level games are visible (UIPI)
     float scale = 1.0f;
     CatCoatTheme coatTheme = CatCoatTheme::ClassicBlack;
     KeyboardTheme keyboardTheme = KeyboardTheme::ClassicMilk;
@@ -53,10 +56,13 @@ struct CatSettings {
             return defVal;
         };
         showKeyBadges    = readDword(L"ShowKeyBadges", 1) != 0;
+        showMouseBadges  = readDword(L"ShowMouseBadges", 1) != 0;
+        showKeyLegends   = readDword(L"ShowKeyLegends", 1) != 0;
         footEasterEgg    = readDword(L"FootEasterEgg", 1) != 0;
         petInteraction   = readDword(L"PetInteraction", 1) != 0;
         fullClickThrough = readDword(L"FullClickThrough", 0) != 0;
         alwaysOnTop      = readDword(L"AlwaysOnTop", 1) != 0;
+        runAsAdmin       = readDword(L"RunAsAdmin", 0) != 0;
         scale            = std::clamp((float)readDword(L"ScalePct", 100) / 100.0f, 0.5f, 2.0f);
         coatTheme        = (CatCoatTheme)std::clamp((int)readDword(L"CoatTheme", 0), 0, 3);
         keyboardTheme    = (KeyboardTheme)std::clamp((int)readDword(L"KeyboardTheme", 0), 0, 2);
@@ -76,10 +82,13 @@ struct CatSettings {
             RegSetValueExW(hKey, name, 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
         };
         writeDword(L"ShowKeyBadges", showKeyBadges ? 1 : 0);
+        writeDword(L"ShowMouseBadges", showMouseBadges ? 1 : 0);
+        writeDword(L"ShowKeyLegends", showKeyLegends ? 1 : 0);
         writeDword(L"FootEasterEgg", footEasterEgg ? 1 : 0);
         writeDword(L"PetInteraction", petInteraction ? 1 : 0);
         writeDword(L"FullClickThrough", fullClickThrough ? 1 : 0);
         writeDword(L"AlwaysOnTop", alwaysOnTop ? 1 : 0);
+        writeDword(L"RunAsAdmin", runAsAdmin ? 1 : 0);
         writeDword(L"ScalePct", (DWORD)(scale * 100.0f + 0.5f));
         writeDword(L"CoatTheme", (DWORD)coatTheme);
         writeDword(L"KeyboardTheme", (DWORD)keyboardTheme);
@@ -225,9 +234,10 @@ public:
         }
     }
 
-    void triggerMouseClick(int button, bool isDown) {
+    void triggerMouseClick(int button, bool isDown, const CatSettings& settings) {
         sleepiness = 0.0f;
         if (isDown) {
+            double now = nowSeconds();
             if (button == 0) {
                 mousePressLeft.target = 1.0f;
                 leftPaw.y.velocity += 130.0f;
@@ -237,6 +247,11 @@ public:
             }
             pupilScale.target = 1.12f;
             earTwitch.velocity -= 2.2f;
+            if (settings.showMouseBadges) {
+                std::wstring lbl = (button == 0) ? L"\u5DE6\u952E" : (button == 1 ? L"\u53F3\u952E" : L"\u4E2D\u952E");
+                Pt pt = { MouseBaseCenter.x + mouseOffset.point().x, MouseBaseCenter.y + mouseOffset.point().y - 6.0f };
+                spawnFloatingKeycap(lbl, pt, now);
+            }
         } else {
             if (button == 0) mousePressLeft.target = 0.0f;
             else mousePressRight.target = 0.0f;
@@ -316,12 +331,12 @@ public:
 
         // 2b. Fast Mouse Movement -> Hunting Mode (big round boba pupils + low crouch!)
         float mouseSpeed = std::hypot(engine.mouseVelocity.x, engine.mouseVelocity.y);
-        if (mouseSpeed > 460.0f && petHeadIntensity < 0.25f && petBodyIntensity < 0.25f) {
-            float boost = std::min(1.0f, (mouseSpeed - 460.0f) / 1100.0f);
-            huntIntensity.target = std::min(1.0f, huntIntensity.target + (0.45f + boost * 1.15f) * dt);
+        if (mouseSpeed > 1500.0f && petHeadIntensity < 0.25f && petBodyIntensity < 0.25f) {
+            float boost = std::min(1.0f, (mouseSpeed - 1500.0f) / 1800.0f);
+            huntIntensity.target = std::min(1.0f, huntIntensity.target + (0.40f + boost * 1.25f) * dt);
             sleepiness = 0.0f;
         } else {
-            huntIntensity.target = std::max(0.0f, huntIntensity.target - dt * 0.65f);
+            huntIntensity.target = std::max(0.0f, huntIntensity.target - dt * 1.15f);
         }
         huntIntensity.step(dt, 85.0f, 16.0f);
         float hunt = std::clamp(huntIntensity.value, 0.0f, 1.0f);

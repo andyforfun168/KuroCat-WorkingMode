@@ -141,6 +141,10 @@ public:
         return (int)recentKeyTimes_.size() * 6;
     }
 
+    double lastAnyInputTime() const {
+        return std::max(lastKeyActivityTime, std::max(lastMouseMoveTime, lastMouseClickTime));
+    }
+
 private:
     struct RawEvt {
         bool isMouseBtn = false;
@@ -232,7 +236,9 @@ private:
             return;
         }
 
-        int major = 2, minor = 0;
+        // Announce XI 2.2: with 2.0 semantics the server stops sending raw events to us while
+        // another client (e.g. a fullscreen game) holds a keyboard/pointer grab.
+        int major = 2, minor = 2;
         if (XIQueryVersion(dpy, &major, &minor) != Success) {
             XCloseDisplay(dpy);
             return;
@@ -255,22 +261,31 @@ private:
         isXI2Active = true;
 
         int xfd = ConnectionNumber(dpy);
+        double lastPointerQuery = -1.0;
+        bool pointerQueryPending = true;
         while (running_) {
+            // Only round-trip to the X server for the cursor position when the mouse actually
+            // moved (max 60Hz), plus a slow 2Hz refresh. The old unconditional 60Hz XQueryPointer
+            // loop added constant load on weak UOS/Kylin machines even with the mouse idle.
             struct pollfd pfd = { xfd, POLLIN, 0 };
-            int ret = poll(&pfd, 1, 16);
+            int ret = poll(&pfd, 1, pointerQueryPending ? 16 : 100);
 
-            // Sample global root cursor cleanly on X11
-            Window rRet, cRet;
-            int rx = 0, ry = 0, wx = 0, wy = 0;
-            unsigned int maskRet = 0;
-            if (XQueryPointer(dpy, root, &rRet, &cRet, &rx, &ry, &wx, &wy, &maskRet)) {
-                std::lock_guard<std::mutex> lk(mu_);
-                hasXCursor_ = true;
-                xCursorX_ = (float)rx;
-                xCursorY_ = (float)ry;
+            double nowT = nowSeconds();
+            if ((pointerQueryPending && nowT - lastPointerQuery >= 0.016) || nowT - lastPointerQuery > 0.5) {
+                Window rRet, cRet;
+                int rx = 0, ry = 0, wx = 0, wy = 0;
+                unsigned int maskRet = 0;
+                if (XQueryPointer(dpy, root, &rRet, &cRet, &rx, &ry, &wx, &wy, &maskRet)) {
+                    std::lock_guard<std::mutex> lk(mu_);
+                    hasXCursor_ = true;
+                    xCursorX_ = (float)rx;
+                    xCursorY_ = (float)ry;
+                }
+                lastPointerQuery = nowT;
+                pointerQueryPending = false;
             }
 
-            if (ret <= 0) continue;
+            if (ret <= 0 && XPending(dpy) == 0) continue;
             while (XPending(dpy) > 0) {
                 XEvent ev;
                 XNextEvent(dpy, &ev);
@@ -289,6 +304,7 @@ private:
                             else if (raw->detail == 3) pushMouseBtn(1, down, false);
                             else if (raw->detail == 2) pushMouseBtn(2, down, false);
                         } else if (ev.xcookie.evtype == XI_RawMotion) {
+                            pointerQueryPending = true;
                             double* vals = raw->raw_values;
                             float dx = 0.0f, dy = 0.0f;
                             int idx = 0;

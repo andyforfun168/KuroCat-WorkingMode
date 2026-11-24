@@ -26,6 +26,6 @@
 - 本地 macOS：`./build.sh`；实现集中在 `scripts/build-macos.sh`。
 - 本地 Windows / Linux：使用各自平台目录里的原有构建入口。
 - 普通构建仅有 `contents: read`；只有准备发布的 release job 有 `contents: write`。
-- Linux 容器基线为 Ubuntu 22.04 / glibc 2.35；Debian 包通过 `dpkg-shlibdeps` 记录实际运行依赖，禁止只凭发行版名称宣称兼容。
+- Linux 容器基线为 Debian 10 / glibc 2.28；Debian 包通过 `dpkg-shlibdeps` 记录实际运行依赖，禁止只凭发行版名称宣称兼容。
 - macOS / Windows 当前没有正式的发行者签名或 notarization。不要在 Release 中写成已签名认证发行版。
 - 不要把本地密钥、开发者证书、私人配置或构建缓存提交到仓库。

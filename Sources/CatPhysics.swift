@@ -32,7 +32,7 @@ enum EyeColorTheme: String, CaseIterable {
     var primaryColor: NSColor {
         switch self {
         case .neonChartreuse: return NSColor(calibratedRed: 0.79, green: 0.95, blue: 0.25, alpha: 1.0) // #C9F240
-        case .siameseBlue:    return NSColor(calibratedRed: 0.37, green: 0.78, blue: 0.98, alpha: 1.0) // #5EC7FA
+        case .siameseBlue:    return NSColor(calibratedRed: 0.69, green: 0.855, blue: 0.95, alpha: 1.0) // #B0DAF2 通透浅淡冰蓝
         case .warmAmber:      return NSColor(calibratedRed: 0.98, green: 0.76, blue: 0.22, alpha: 1.0)
         case .iceCyan:        return NSColor(calibratedRed: 0.45, green: 0.92, blue: 0.96, alpha: 1.0)
         case .referenceHazel: return NSColor(calibratedRed: 218.0/255, green: 178.0/255, blue: 87.0/255, alpha: 1)
@@ -43,7 +43,7 @@ enum EyeColorTheme: String, CaseIterable {
     var glowColor: NSColor {
         switch self {
         case .neonChartreuse: return NSColor(calibratedRed: 0.77, green: 0.95, blue: 0.24, alpha: 0.85)
-        case .siameseBlue:    return NSColor(calibratedRed: 0.38, green: 0.80, blue: 0.99, alpha: 0.85)
+        case .siameseBlue:    return NSColor(calibratedRed: 0.68, green: 0.85, blue: 0.95, alpha: 0.80)
         case .warmAmber:      return NSColor(calibratedRed: 0.98, green: 0.74, blue: 0.20, alpha: 0.85)
         case .iceCyan:        return NSColor(calibratedRed: 0.42, green: 0.90, blue: 0.98, alpha: 0.85)
         case .referenceHazel: return NSColor(calibratedRed: 218.0/255, green: 178.0/255, blue: 87.0/255, alpha: 0.85)
@@ -57,6 +57,12 @@ final class CatSettings {
 
     var showKeyBadges: Bool {
         didSet { UserDefaults.standard.set(showKeyBadges, forKey: "KuroCat.ShowKeyBadges") }
+    }
+    var showMouseBadges: Bool {
+        didSet { UserDefaults.standard.set(showMouseBadges, forKey: "KuroCat.ShowMouseBadges") }
+    }
+    var showKeyLegends: Bool {
+        didSet { UserDefaults.standard.set(showKeyLegends, forKey: "KuroCat.ShowKeyLegends") }
     }
     var footEasterEgg: Bool {
         didSet { UserDefaults.standard.set(footEasterEgg, forKey: "KuroCat.FootEasterEgg") }
@@ -86,6 +92,8 @@ final class CatSettings {
     private init() {
         let d = UserDefaults.standard
         showKeyBadges = d.object(forKey: "KuroCat.ShowKeyBadges") as? Bool ?? true
+        showMouseBadges = d.object(forKey: "KuroCat.ShowMouseBadges") as? Bool ?? true
+        showKeyLegends = d.object(forKey: "KuroCat.ShowKeyLegends") as? Bool ?? true
         footEasterEgg = d.object(forKey: "KuroCat.FootEasterEgg") as? Bool ?? true
         petInteraction = d.object(forKey: "KuroCat.PetInteraction") as? Bool ?? true
         fullClickThrough = d.object(forKey: "KuroCat.FullClickThrough") as? Bool ?? false
@@ -309,6 +317,7 @@ final class CatPhysics {
     func triggerMouseClick(button: Int, isDown: Bool) {
         sleepiness = 0
         if isDown {
+            let now = CACurrentMediaTime()
             if button == 0 {
                 mousePressLeft.target = 1.0
                 leftPaw.y.velocity += 130
@@ -318,6 +327,14 @@ final class CatPhysics {
             }
             pupilScale.target = 1.12
             earTwitch.velocity -= 2.2
+            if CatSettings.shared.showMouseBadges {
+                let label = button == 0 ? "左键" : (button == 1 ? "右键" : "中键")
+                let pt = CGPoint(
+                    x: CatPhysics.mouseBaseCenter.x + mouseOffset.point.x,
+                    y: CatPhysics.mouseBaseCenter.y + mouseOffset.point.y - 6
+                )
+                spawnFloatingKeycap(label: label, near: pt, now: now)
+            }
         } else {
             if button == 0 { mousePressLeft.target = 0 }
             else { mousePressRight.target = 0 }
@@ -448,14 +465,14 @@ final class CatPhysics {
 
         // 2b. Fast Mouse Movement -> Hunting / Stalking Mode (dilated round boba pupils + low crouch!)
         let mouseSpeed = hypot(curMouseVel.dx, curMouseVel.dy)
-        if mouseSpeed > 460 && petHeadIntensity < 0.25 && petBodyIntensity < 0.25 {
-            // Build up smoothly & responsively with fast mouse waving (laser-pointer effect!)
-            let boost = min(1.0, (mouseSpeed - 460) / 1100.0)
-            huntIntensity.target = min(1.0, huntIntensity.target + (0.45 + boost * 1.15) * dt)
+        if mouseSpeed > 1500 && petHeadIntensity < 0.25 && petBodyIntensity < 0.25 {
+            // Only rapid mouse shaking/flicking triggers hunting dilation (ignore casual movement)
+            let boost = min(1.0, (mouseSpeed - 1500) / 1800.0)
+            huntIntensity.target = min(1.0, huntIntensity.target + (0.40 + boost * 1.25) * dt)
             sleepiness = 0
         } else {
-            // Calm down gently once cursor stops darting
-            huntIntensity.target = max(0.0, huntIntensity.target - dt * 0.65)
+            // Calm down quickly once cursor stops darting
+            huntIntensity.target = max(0.0, huntIntensity.target - dt * 1.15)
         }
         huntIntensity.step(dt: dt, stiffness: 85, damping: 16)
         let hunt = max(0, min(1, huntIntensity.value))

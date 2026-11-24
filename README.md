@@ -15,7 +15,7 @@
   Native macOS (Swift + CoreGraphics + IOHIDManager) · Windows (C++17 + GDI+ + Raw Input) · Linux / 统信 UOS (C++17 + GTK3/Cairo + XInput2/evdev)
 </p>
 
-> 本仓库是 [chanke17/KuroCat](https://github.com/chanke17/KuroCat) 的 fork。当前发布版为 [v1.3.5](https://github.com/andyforfun168/KuroCatAndy/releases/tag/v1.3.5)，保留橙眼应用图标、更新提醒和已确认的美短 / 橘白修复。下载及更新请使用本仓库的 [Releases](https://github.com/andyforfun168/KuroCatAndy/releases/latest)。
+> 本仓库是 [chanke17/KuroCat](https://github.com/chanke17/KuroCat) 的 fork。v1.3.6 同步新版暹罗猫、只摸头互动、快速甩鼠捕猎、键盘字符与点击气泡、平台修复及 Linux 免密码安装；保留橙眼图标和本 fork 已确认的美短 / 橘白外观，移除全部应用内更新功能。请从[本仓库 Release](https://github.com/andyforfun168/KuroCatAndy/releases/latest)手动下载。
 
 ---
 
@@ -31,11 +31,11 @@
   - 快速晃动鼠标时，小猫瞳孔从竖瞳逐渐扩张为超大圆润黑瞳 + 白色高光，身子压低伏击、尾巴加快抽动、全程锁敌不眨眼。
 - **🐾 丰富交互彩蛋**
   - **3 键同时按「用脚按」**：同时按住 3 个及以上按键时，小猫会翘起后脚踩上第 3 个键！
-  - **摸头/摸背互动**：鼠标轻撸猫头会露出惬意闭眼 `— —` 与微光粒子，闲置久了还会打瞌睡冒 `z`。
-  - **智能鼠标穿透、开机自启 & 自动更新检测**：透明区域自动穿透不挡操作；玩竞技游戏时可一键开启「完全鼠标穿透（游戏防误触）」，支持一键勾选「开机自动启动」（Windows 注册表 / macOS LaunchAgent / Linux XDG Autostart），默认每天最多检查一次本 fork 的新版本，发现更新后提示打开 GitHub 下载页。
+  - **摸头互动**：仅鼠标轻撸猫头会露出惬意闭眼 `— —` 与微光粒子，闲置久了还会打瞌睡冒 `z`。
+  - **智能鼠标穿透 & 开机自启**：透明区域自动穿透不挡操作；玩竞技游戏时可一键开启「完全鼠标穿透（游戏防误触）」，支持一键勾选「开机自动启动」（Windows 注册表 / macOS LaunchAgent / Linux XDG Autostart）。
 - **🎨 四款皮肤 & 多配色自由搭配**
   - **猫咪皮肤**：经典小黑猫（原版荧光黄绿瞳）/ 挖煤暹罗猫（暖燕麦奶白 + 2.5D 焦糖面罩 + 巧克力小袜子 + 宝石蓝瞳）/ 美短（银虎斑加白 + 平顶白色额纹）/ 橘白猫（橘色头顶 + 白胸与白手套）
-  - **键盘配色**：经典奶白暖黄 / 暗夜极客黑 / 复古奶油灰（支持开关按键气泡）
+  - **键盘配色**：经典奶白暖黄 / 暗夜极客黑 / 复古奶油灰（支持开关键盘字符、按键气泡与鼠标点击气泡）
   - **瞳色与缩放**：6 种瞳色、5 档尺寸缩放、今日击键与实时 KPM 统计。
 
 ### 四款皮肤 6 态预览
@@ -48,7 +48,7 @@
 | :---: | :---: |
 | <img src="assets/preview_shorthair.jpg" width="420" alt="美短六态预览"/> | <img src="assets/preview_orangeWhite.jpg" width="420" alt="橘白猫六态预览"/> |
 
-新增皮肤的六态图为应用原生绘制：待机、左上转头、右下转头、捕猎、键鼠与第三只脚、摸头闭眼。图中使用可选瞳色「淡金青绿」；在菜单中先选择皮肤，再到「瞳色切换」选择喜欢的配色。
+新增皮肤的六态图为应用原生绘制：待机、左上转头、右下转头、捕猎、键鼠与第三只脚、摸头闭眼。图中使用可选瞳色「琥珀金瞳」，两款新皮肤带有随头部投影的粉色鼻子和灰色嘴巴；在菜单中先选择皮肤，再到「瞳色切换」选择喜欢的配色。
 
 ---
 
@@ -56,7 +56,7 @@
 
 前往右侧 **[Releases](../../releases)** 页面直接下载对应系统版本（由 GitHub Actions 自动编译）：
 
-### 🍎 macOS (Apple Silicon & Intel 通用 · macOS 13+)
+### 🍎 macOS (Apple Silicon & Intel 通用 · macOS 11+)
 1. 下载 `KuroCat-macOS-universal.zip` 解压，将 `KuroCat.app` 拖入「应用程序」打开（常驻顶部菜单栏，不占 Dock）。
 2. 首次使用点击小猫底部提示胶囊，前往 **系统设置 → 隐私与安全性 → 输入监控** 勾选 `KuroCat` 后在菜单栏点「重启 KuroCat」即可全局监听打字与游戏按键。
 3. 支持在菜单中一键开启 **开机自动启动**；开启「完全鼠标穿透」后，可通过顶部菜单栏小猫图标或 **按住 `⌥ Option` 键直接右键/拖动小猫**。
@@ -68,19 +68,19 @@ chmod +x build.sh
 open KuroCat.app
 ```
 
-### 🪟 Windows (Windows 10 / 11 x64)
-1. 下载单文件 `KuroCat-Windows-x64.exe`（约 382 KB，**零外部运行时依赖**），双击即可运行，常驻右下角系统托盘。
+### 🪟 Windows (Windows 7 SP1 / 8 / 10 / 11 x64)
+1. 下载单文件 `KuroCat-Windows-x64.exe`（约 220 KB，**零外部运行时依赖**），双击即可运行，常驻右下角系统托盘。
 2. 右键小猫或左键/右键托盘小猫图标即可切换皮肤、键盘配色、尺寸、**开机自动启动**、游戏防误触穿透模式等。
 3. **开启「完全鼠标穿透」后，以下 4 种方式均可随时取消或呼出菜单**：
    - 全局快捷键：**`Ctrl + Alt + Shift + P`** 一键切换/取消穿透；
    - 临时解锁：按住 **`Alt`** 键，再直接右键小猫取消勾选或左键拖动；
    - 系统托盘：点击任务栏右下角 **`^` 隐藏图标区** 中的黑猫图标（左键或右键均可弹出菜单）；
    - 保底方式：**再次双击 `KuroCat.exe`**，会自动取消穿透并直接在鼠标处弹出设置菜单。
-   > **游戏里小猫只跟鼠标、不跟键盘？** 如果游戏或启动器以管理员权限运行，右键 `KuroCat-Windows-x64.exe`，选择「以管理员身份运行」后再试。
+   > **游戏里小猫只跟鼠标、不跟键盘？** 这类游戏（及 WeGame 等启动器）以管理员权限运行，Windows 会拦截它的键盘输入。右键小猫 →「以管理员身份重新启动」即可；想一劳永逸可勾选「每次启动都以管理员身份运行」。小猫检测到这种游戏时也会在托盘弹出提示。
    >
-   > **进游戏小猫消失？** 对于独占全屏游戏，请尝试在游戏设置里切换为「无边框窗口 / 窗口化全屏」。
+   > **进游戏小猫消失？** 小猫会在全屏/无边框游戏切到前台后自动重新置顶，游戏切换分辨率后也会自动回到屏幕内。如果游戏用的是「独占全屏」，任何桌面窗口都无法盖在上面，请在游戏设置里改成「无边框窗口 / 窗口化全屏」。
    >
-   > **下载新版后仍提示更新？** 先从托盘菜单退出旧版，再启动新 exe，避免继续运行旧文件。
+   > **下载新版后仍是旧版？** 先退出托盘中的旧版，再启动新 exe；新版也支持接管旧进程。
 
 **本地源码编译（MSVC / MinGW）：**
 ```bat
@@ -94,19 +94,24 @@ cmake -B build && cmake --build build --config Release
 ```
 
 ### 🐧 Linux & 统信 UOS / 银河麒麟 (x86_64 & ARM64)
-源码支持 **Ubuntu 20.04+ / Debian 11+ / Deepin / 统信 UOS（x86_64 & ARM64 飞腾/鲲鹏）/ 银河麒麟 / Arch / Fedora**。本 fork 的预编译包以 Ubuntu 22.04 为基线，旧版系统可能需要本地编译；Wayland 功能受桌面环境限制。详见 [安装与排障](docs/DOWNLOADS.md)。
+支持 **Ubuntu 20.04+ / Debian 11+ / Deepin / 统信 UOS（x86_64 & ARM64 飞腾/鲲鹏）/ 银河麒麟 / Arch / Fedora**：
 
-1. **统信 UOS / Deepin / Ubuntu / Debian（推荐直接装 `.deb`）**：
-   - 下载对应架构安装包：`KuroCat-Linux-amd64.deb`（Intel/AMD/兆芯/海光）或 `KuroCat-Linux-arm64.deb`（飞腾/鲲鹏/树莓派等 ARM64）。
-   - 统信 UOS 直接**双击 `.deb` 用软件包安装器安装**，或终端执行：
+1. **免密码安装（推荐统信 UOS / 银河麒麟，不需要开机密码）**：
+   - 下载 `KuroCat-Linux-x86_64.tar.gz`（Intel/AMD/兆芯/海光）或 `KuroCat-Linux-arm64.tar.gz`（飞腾/鲲鹏等 ARM64），解压。
+   - 在解压出的文件夹里右键「在终端中打开」，执行 `bash install.sh`。程序只装到当前用户的 `~/.local`，装完自动启动，开始菜单可搜到 **KuroCat**；卸载执行 `bash uninstall.sh`。
+   - 压缩包里的 `安装说明.txt` 有麒麟「应用执行控制」、统信「开发者模式」、CPU 架构不匹配等常见问题的处理方法。
+2. **`.deb` 安装包（统信 UOS / Deepin / Ubuntu / Debian / 麒麟）**：
+   - 双击 `KuroCat-Linux-amd64.deb` / `KuroCat-Linux-arm64.deb` 用软件包安装器安装（系统会要求输入开机密码），或终端执行：
      ```bash
      sudo apt install ./KuroCat-Linux-amd64.deb
      ```
-   - 安装后在开始菜单搜索 **KuroCat** 或终端输入 `kurocat` 启动。**统信 UOS 默认 X11 桌面开箱即用，无需额外权限即可全局监听打字和游戏！**
-2. **其他 Linux 发行版（Arch / Fedora 等）**：
-   - 下载 `KuroCat-Linux-x86_64.tar.gz` 或 `KuroCat-Linux-arm64.tar.gz` 解压直接运行 `./kurocat`。
+   - 安装包在 Debian 10（glibc 2.28）环境中编译，统信 UOS 20、银河麒麟 V10 等较老的系统也能运行；使用 tar 包中的 `bash install.sh` 可安装到当前用户目录，**不再需要输入密码**。
+   - **麒麟安装失败**：「安全中心」→「应用保护 / 应用执行控制」改为「关闭」或「警告」后再装，或直接用上面的免密码安装。
+3. **其他 Linux 发行版（Arch / Fedora 等）**：
+   - 解压 tar.gz 后运行 `bash install.sh`，或直接运行 `./kurocat`。
    - 若使用纯 **Wayland** 会话，执行一次 `sudo usermod -aG input $USER` 并重新登录即可启用 `evdev` 内核级全局监听。
-3. **龙芯（LoongArch）或老版本 UOS 本地源码编译**：
+4. **电脑变卡？** 默认使用省电自适应帧率（打字/移动鼠标时 30fps、空闲 20fps、睡觉 10fps）；右键小猫可开启「高帧率 60fps」，低配电脑请保持关闭。
+5. **龙芯（LoongArch / MIPS）本地源码编译**：
    ```bash
    sudo apt install g++ pkg-config libgtk-3-dev libcairo2-dev libx11-dev libxi-dev
    cd linux && chmod +x build.sh build_deb.sh
@@ -135,11 +140,7 @@ KuroCat/
 
 ## 🔒 隐私说明
 
-KuroCat 的所有键盘与鼠标硬件信号**仅在本地内存实时驱动桌宠动画与计数**，**绝不记录按键内容、绝不写日志、不上传键鼠内容**，全部源码完全开源可审计。
-
-更新检查：默认每天最多一次访问 GitHub Release API，仅用于读取公开版本号；请求包含 IP 地址和应用版本 User-Agent，不上传按键、鼠标轨迹或使用统计。可在菜单关闭「自动检查更新」，或手动选择「检查更新…」。发现新版本时提示打开下载页，不自动下载、安装或替换应用。
-
-已下载 v1.3.0 或更早版本的用户，需要先手动升级到 v1.3.1，之后才能收到应用内更新提醒。
+键盘和鼠标输入仅在本地驱动动画与计数，不记录或上传按键内容。本 fork 已移除应用内更新检查、更新提醒和自动下载安装；需要更新时请手动前往本仓库的 [GitHub Release](https://github.com/andyforfun168/KuroCatAndy/releases/latest)。
 
 ## 📄 License
 
