@@ -55,6 +55,7 @@ final class CatCanvasView: NSView {
 
         guard let pt = canvasPoint(fromScreenPoint: screenPt) else {
             lastHoverCanvasPt = nil
+            physics.updateTailHover(canvasPoint: nil)
             if !win.ignoresMouseEvents {
                 win.ignoresMouseEvents = true
             }
@@ -63,6 +64,7 @@ final class CatCanvasView: NSView {
         }
 
         let zone = CatRenderer.hitTest(point: pt, physics: physics, showPermissionPill: showPill)
+        physics.updateTailHover(canvasPoint: pt)
 
         // Petting triggers strictly on the cat's head (never on keyboard or torso)!
         if zone == .head {

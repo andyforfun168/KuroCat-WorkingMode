@@ -38,6 +38,11 @@
   - **Keyboard Themes**: Classic Warm Cream / Midnight Geek Black / Retro Cream Gray (toggle key labels, key bubbles, and mouse click bubbles)
   - **Eye Colors & Scaling**: 6 eye colors, 5 size levels, plus daily keystroke counter and live KPM stats.
 
+- **🌈 Keyboard marquee and tail interactions**
+  - RGB marquee lighting and the exactly-four-keys tail-press easter egg are enabled by default, with separate menu switches. The three-key foot action remains available.
+  - Moving the cursor near the tail makes it flick away and spring back.
+  - v1.3.8 also includes macOS/Linux stuck-key recovery and the Windows Alt/right-click menu fix, while retaining this fork's orange-eye icon, paired skin eye colors and manual Release downloads.
+
 ### 6-State Preview of All 4 Skins
 
 | Classic Black Cat | Siamese Cat |

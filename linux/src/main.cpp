@@ -28,7 +28,7 @@
 #include <fcntl.h>
 #include <glib-unix.h>
 
-#define KUROCAT_VERSION_STR "1.3.7"
+#define KUROCAT_VERSION_STR "1.3.8"
 static constexpr const char* APP_VERSION = KUROCAT_VERSION_STR;
 // Other KuroCat builds scan installed binaries for this marker (see readBinaryVersion) to find the
 // newest copy WITHOUT executing it. Always derived from KUROCAT_VERSION_STR.
@@ -454,6 +454,14 @@ static void showPopupMenu(LinuxApp& app, GdkEventButton* evt) {
         g_app->settings.footEasterEgg = gtk_check_menu_item_get_active(item);
         g_app->settings.save();
     }));
+    addCheck("4键同时按「用尾巴按」彩蛋", app.settings.tailEasterEgg, G_CALLBACK(+[](GtkCheckMenuItem* item, gpointer) {
+        g_app->settings.tailEasterEgg = gtk_check_menu_item_get_active(item);
+        g_app->settings.save();
+    }));
+    addCheck("键盘跑马灯流光", app.settings.keyboardMarquee, G_CALLBACK(+[](GtkCheckMenuItem* item, gpointer) {
+        g_app->settings.keyboardMarquee = gtk_check_menu_item_get_active(item);
+        g_app->settings.save();
+    }));
     addCheck("摸头闭眼互动", app.settings.petInteraction, G_CALLBACK(+[](GtkCheckMenuItem* item, gpointer) {
         g_app->settings.petInteraction = gtk_check_menu_item_get_active(item);
         g_app->settings.save();
@@ -734,6 +742,7 @@ static gboolean onFrameTick(gpointer) {
                 (cur.y - (float)winY) / (float)winH * CatPhysics::CanvasHeight
             };
             CatHitZone zone = CatRenderer::hitTest(cp, g_app->physics, g_app->settings.coatTheme);
+            g_app->physics.updateTailHover(&cp);
             if (zone == CatHitZone::Head) {
                 if (g_app->hasLastHover) {
                     float d = std::hypot(cp.x - g_app->lastHoverCanvas.x, cp.y - g_app->lastHoverCanvas.y);
@@ -748,6 +757,7 @@ static gboolean onFrameTick(gpointer) {
             }
         } else {
             g_app->hasLastHover = false;
+            g_app->physics.updateTailHover(nullptr);
         }
     }
 

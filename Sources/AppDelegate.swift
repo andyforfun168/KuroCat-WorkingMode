@@ -10,7 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var isHandingOverToNewerCopy = false
 
     private var currentAppVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.3.7"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.3.8"
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -211,6 +211,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         footItem.state = settings.footEasterEgg ? .on : .off
         menu.addItem(footItem)
 
+        let tailItem = NSMenuItem(title: "4键同时按「用尾巴按」彩蛋", action: #selector(toggleTailEgg), keyEquivalent: "")
+        tailItem.target = self
+        tailItem.state = settings.tailEasterEgg ? .on : .off
+        menu.addItem(tailItem)
+
+        let marqueeItem = NSMenuItem(title: "键盘跑马灯流光", action: #selector(toggleKeyboardMarquee), keyEquivalent: "")
+        marqueeItem.target = self
+        marqueeItem.state = settings.keyboardMarquee ? .on : .off
+        menu.addItem(marqueeItem)
+
         let petItem = NSMenuItem(title: "摸头闭眼互动", action: #selector(togglePetInteraction), keyEquivalent: "")
         petItem.target = self
         petItem.state = settings.petInteraction ? .on : .off
@@ -401,6 +411,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleFootEgg() {
         CatSettings.shared.footEasterEgg.toggle()
+    }
+
+    @objc private func toggleTailEgg() {
+        CatSettings.shared.tailEasterEgg.toggle()
+    }
+
+    @objc private func toggleKeyboardMarquee() {
+        CatSettings.shared.keyboardMarquee.toggle()
     }
 
     @objc private func togglePetInteraction() {

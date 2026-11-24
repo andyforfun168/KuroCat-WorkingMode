@@ -189,7 +189,7 @@ private:
             else { evdevKeys_.erase(key); xi2Keys_.erase(key); }
         } else {
             if (isDown) xi2Keys_.insert(key);
-            else { xi2Keys_.erase(key); if (!isEvdevActive) evdevKeys_.erase(key); }
+            else { xi2Keys_.erase(key); evdevKeys_.erase(key); }
         }
 
         activeKeys = evdevKeys_;

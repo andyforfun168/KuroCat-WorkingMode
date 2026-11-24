@@ -7,6 +7,7 @@ final class RenderSettings {
  var keyboardTheme = KeyboardTheme.classicMilk
  var showKeyLegends = false
  let showKeyBadges = false
+ let keyboardMarquee = false
 }
 let output = URL(fileURLWithPath: CommandLine.arguments[1])
 try! FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)

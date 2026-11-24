@@ -13,6 +13,10 @@
 #endif
 #include <windows.h>
 #include <shellapi.h>
+// GDI+ inline helpers need std min/max before its headers when NOMINMAX is set.
+#include <algorithm>
+using std::min;
+using std::max;
 #include <objidl.h>
 #include <gdiplus.h>
 #include <wtsapi32.h>
@@ -20,7 +24,6 @@
 #include <vector>
 #include <cmath>
 #include <cwchar>
-#include <algorithm>
 #include "KeyMap.hpp"
 #include "InputEngine.hpp"
 #include "CatPhysics.hpp"
@@ -45,7 +48,7 @@
 
 namespace {
 
-constexpr const wchar_t* APP_VERSION = L"1.3.7";
+constexpr const wchar_t* APP_VERSION = L"1.3.8";
 constexpr const wchar_t* VERSION_PROP = L"KuroCatVersion"; // set on the tray owner window so newer builds can take over older ones
 constexpr const wchar_t* TRAY_OWNER_CLASS = L"KuroCatTrayOwnerClass";
 constexpr const wchar_t* OVERLAY_CLASS = L"KuroCatOverlayWindowClass";
@@ -66,6 +69,8 @@ enum MenuCmd : UINT {
     CMD_TOGGLE_MOUSE_BADGES,
     CMD_TOGGLE_KEY_LEGENDS,
     CMD_TOGGLE_FOOT,
+    CMD_TOGGLE_TAIL,
+    CMD_TOGGLE_MARQUEE,
     CMD_TOGGLE_PET,
     CMD_COAT_BLACK,
     CMD_COAT_SIAMESE,
@@ -104,6 +109,9 @@ struct AppState {
 
     bool isVisible = true;
     bool isDragging = false;
+    bool rButtonDown = false;
+    bool pendingMenuAfterAlt = false;
+    POINT pendingMenuPt = {};
     POINT dragStartCursor = {};
     POINT dragStartWinOrigin = {};
     bool hasLastHover = false;
@@ -536,6 +544,8 @@ void showContextMenu(AppState& app, POINT screenPt) {
     AppendMenuW(menu, MF_STRING | (app.settings.showMouseBadges ? MF_CHECKED : 0), CMD_TOGGLE_MOUSE_BADGES, L"\u663E\u793A\u9F20\u6807\u70B9\u51FB\u6C14\u6CE1 ([\u5DE6\u952E] [\u53F3\u952E])");
     AppendMenuW(menu, MF_STRING | (app.settings.showKeyLegends ? MF_CHECKED : 0), CMD_TOGGLE_KEY_LEGENDS, L"\u663E\u793A\u952E\u76D8\u5B57\u7B26");
     AppendMenuW(menu, MF_STRING | (app.settings.footEasterEgg ? MF_CHECKED : 0), CMD_TOGGLE_FOOT, L"3\u952E\u540C\u65F6\u6309\u300C\u7528\u811A\u6309\u300D\u5F69\u86CB");
+    AppendMenuW(menu, MF_STRING | (app.settings.tailEasterEgg ? MF_CHECKED : 0), CMD_TOGGLE_TAIL, L"4\u952E\u540C\u65F6\u6309\u300C\u7528\u5C3E\u5DF4\u6309\u300D\u5F69\u86CB");
+    AppendMenuW(menu, MF_STRING | (app.settings.keyboardMarquee ? MF_CHECKED : 0), CMD_TOGGLE_MARQUEE, L"\u952E\u76D8\u8DD1\u9A6C\u706F\u6D41\u5149");
     AppendMenuW(menu, MF_STRING | (app.settings.petInteraction ? MF_CHECKED : 0), CMD_TOGGLE_PET, L"\u6478\u5934/\u6478\u80CC\u95ED\u773C\u4E92\u52A8");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
@@ -621,6 +631,14 @@ void showContextMenu(AppState& app, POINT screenPt) {
             break;
         case CMD_TOGGLE_FOOT:
             app.settings.footEasterEgg = !app.settings.footEasterEgg;
+            app.settings.saveToRegistry();
+            break;
+        case CMD_TOGGLE_TAIL:
+            app.settings.tailEasterEgg = !app.settings.tailEasterEgg;
+            app.settings.saveToRegistry();
+            break;
+        case CMD_TOGGLE_MARQUEE:
+            app.settings.keyboardMarquee = !app.settings.keyboardMarquee;
             app.settings.saveToRegistry();
             break;
         case CMD_TOGGLE_PET:
@@ -748,6 +766,7 @@ void tickAndRender(AppState& app) {
                 (float)(cur.y - wr.top)  / (float)h * CatPhysics::CanvasHeight
             };
             CatHitZone zone = CatRenderer::hitTest(cp, app.physics, app.settings.coatTheme);
+            app.physics.updateTailHover(&cp);
             if (zone == CatHitZone::Head) {
                 if (app.hasLastHover) {
                     float d = std::hypot(cp.x - app.lastHoverCanvas.x, cp.y - app.lastHoverCanvas.y);
@@ -766,8 +785,15 @@ void tickAndRender(AppState& app) {
             setClickThrough(app.hwnd, clickThrough);
         } else {
             app.hasLastHover = false;
+            app.physics.updateTailHover(nullptr);
             setClickThrough(app.hwnd, true);
         }
+    }
+
+    if (app.pendingMenuAfterAlt && (GetAsyncKeyState(VK_MENU) & 0x8000) == 0) {
+        app.pendingMenuAfterAlt = false;
+        POINT pt = app.pendingMenuPt;
+        showContextMenu(app, pt);
     }
 
     // Render 32-bit Premultiplied ARGB frame directly into DIB and present via UpdateLayeredWindow
@@ -901,11 +927,35 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             }
             return 0;
 
+        case WM_RBUTTONDOWN:
+            if (app && hwnd == app->hwnd) {
+                bool altHeld = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+                if (!app->settings.fullClickThrough || altHeld) {
+                    app->rButtonDown = true;
+                }
+            }
+            return 0;
+
         case WM_RBUTTONUP:
-            if (app) {
+            if (app && hwnd == app->hwnd && app->rButtonDown) {
+                app->rButtonDown = false;
                 POINT pt = {};
                 GetCursorPos(&pt);
-                showContextMenu(*app, pt);
+                if ((GetAsyncKeyState(VK_MENU) & 0x8000) != 0) {
+                    // Defer opening the popup menu until Alt is released; otherwise
+                    // Windows' TrackPopupMenu modal loop cancels the menu on WM_SYSKEYUP(VK_MENU).
+                    app->pendingMenuAfterAlt = true;
+                    app->pendingMenuPt = pt;
+                } else {
+                    showContextMenu(*app, pt);
+                }
+            }
+            return 0;
+
+        case WM_CANCELMODE:
+        case WM_CAPTURECHANGED:
+            if (app && hwnd == app->hwnd) {
+                app->rButtonDown = false;
             }
             return 0;
 

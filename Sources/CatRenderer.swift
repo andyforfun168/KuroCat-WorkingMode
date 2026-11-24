@@ -98,10 +98,11 @@ enum CatRenderer {
         drawMouse(in: ctx, physics: physics, theme: settings.keyboardTheme)
 
         // 2. Mini Angled 65% Mechanical Keyboard + Dynamic Keycap Glow
-        drawKeyboard(in: ctx, physics: physics, theme: settings.keyboardTheme, eyeTheme: settings.eyeTheme, showLegends: settings.showKeyLegends)
+        drawKeyboard(in: ctx, physics: physics, theme: settings.keyboardTheme, eyeTheme: settings.eyeTheme, showLegends: settings.showKeyLegends, marquee: settings.keyboardMarquee)
 
-        // 3. Cat Tail (behind body)
-        drawTail(in: ctx, seatX: seatX, seatY: seatY, physics: physics, coat: coat)
+        if physics.tailTyping.value < 0.5 {
+            drawTail(in: ctx, seatX: seatX, seatY: seatY, physics: physics, coat: coat)
+        }
 
         // 4. 3D-Projected Ears (behind crown silhouette so Siamese seal-point ears emerge cleanly from cream skull!)
         let siameseLift: CGFloat = (coat == .siamese) ? -3.0 : 0.0
@@ -132,6 +133,10 @@ enum CatRenderer {
 
         // 8. Front Arms / Paws (over torso & keyboard/mouse with crisp separation outlines / Siamese chocolate socks!)
         drawFrontPaws(in: ctx, seatX: seatX, seatY: seatY, breath: breath, physics: physics, coat: coat)
+
+        if physics.tailTyping.value >= 0.5 {
+            drawTail(in: ctx, seatX: seatX, seatY: seatY, physics: physics, coat: coat)
+        }
 
         // 8. Floating Mechanical Keycap Badges (keyboard + mouse clicks)
         if !physics.floatingKeycaps.isEmpty {
@@ -238,7 +243,8 @@ enum CatRenderer {
         physics: CatPhysics,
         theme: KeyboardTheme,
         eyeTheme: EyeColorTheme,
-        showLegends: Bool
+        showLegends: Bool,
+        marquee: Bool
     ) {
         let tl = KeyboardLayout.screenQuadPoint(su: -0.012, sv: -0.04)
         let tr = KeyboardLayout.screenQuadPoint(su: 1.012, sv: -0.04)
@@ -305,6 +311,43 @@ enum CatRenderer {
         ctx.addPath(topChassis)
         ctx.fillPath()
 
+        // Keyboard marquee backlight: a comet of light sweeps diagonally under the keycaps
+        // (bright head, long fading tail, one full hue cycle per sweep so the deck reads as RGB).
+        let mqHead = physics.marqueePhase.truncatingRemainder(dividingBy: 1.0)
+        let mqCol = hsvColor(hue: mqHead + 0.52, saturation: 0.55, value: 1.0)
+        let bandDx = br.x - tl.x, bandDy = br.y - tl.y
+        let bandLen2 = bandDx * bandDx + bandDy * bandDy
+        func mqWave(_ t: CGFloat) -> CGFloat {
+            guard marquee else { return 0 }
+            var d = mqHead - t
+            if d < 0 { d += 1 }
+            return CGFloat(exp(-Double(d / 0.125)))
+        }
+        if marquee {
+            ctx.saveGState()
+            ctx.addPath(topChassis)
+            ctx.clip()
+            let stopCount = 24
+            var mqColors: [CGColor] = []
+            var mqPos: [CGFloat] = []
+            for i in 0..<stopCount {
+                let t = CGFloat(i) / CGFloat(stopCount - 1)
+                mqPos.append(t)
+                mqColors.append(mqCol.withAlphaComponent(min(1.0, mqWave(t) * 200.0 / 255.0)).cgColor)
+            }
+            if let band = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                     colors: mqColors as CFArray, locations: mqPos) {
+                ctx.drawLinearGradient(band, start: tl, end: br,
+                                       options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+            }
+            // White-hot lamp at the head of the comet.
+            let head = CGPoint(x: tl.x + bandDx * mqHead, y: tl.y + bandDy * mqHead)
+            drawRadialGlow(in: ctx, center: head, radius: 44.0,
+                           color: NSColor(calibratedRed: 240.0/255.0, green: 252.0/255.0,
+                                          blue: 1.0, alpha: 150.0/255.0))
+            ctx.restoreGState()
+        }
+
         // Individual keycaps — tight clean mechanical spacing matching the reference video
         let padU: CGFloat = 0.0028
         let padV: CGFloat = 0.014
@@ -326,7 +369,18 @@ enum CatRenderer {
 
             let kPath = roundedQuadPath(tl: kTL, tr: kTR, br: kBR, bl: kBL, radius: 1.6)
 
+            // Where this keycap sits along the marquee axis, and how bright the comet makes it.
+            let kcx = (kTL.x + kTR.x + kBR.x + kBL.x) * 0.25
+            let kcy = (kTL.y + kTR.y + kBR.y + kBL.y) * 0.25
+            let kt = max(0, min(1, ((kcx - tl.x) * bandDx + (kcy - tl.y) * bandDy) / bandLen2))
+            let mq = mqWave(kt)
+
             var fill = cap.isAmberAccent ? accentColor : keyColor
+            if mq > 0.015 {
+                // Head of the comet reads hot (near white), the trailing keys stay saturated.
+                let lit = blendColor(mqCol, .white, t: mq * mq * 0.5)
+                fill = blendColor(fill, lit, t: max(0, min(0.9, mq * 0.88)))
+            }
             if glow > 0.02 {
                 fill = blendColor(fill, glowBaseColor, t: glow * 0.55)
             }
@@ -335,10 +389,28 @@ enum CatRenderer {
             ctx.addPath(kPath)
             ctx.fillPath()
 
-            ctx.setStrokeColor(keyBorderColor.cgColor)
-            ctx.setLineWidth(0.65)
-            ctx.addPath(kPath)
-            ctx.strokePath()
+            if mq > 0.10 {
+                ctx.setStrokeColor(mqCol.withAlphaComponent(min(1.0, mq * 215.0 / 255.0)).cgColor)
+                ctx.setLineWidth(1.0)
+                ctx.addPath(kPath)
+                ctx.strokePath()
+            } else {
+                ctx.setStrokeColor(keyBorderColor.cgColor)
+                ctx.setLineWidth(0.65)
+                ctx.addPath(kPath)
+                ctx.strokePath()
+            }
+
+            // Under-key bloom where the beam is hottest, so the light spills between caps.
+            if mq > 0.45 {
+                let bloom = (mq - 0.45) / 0.55
+                ctx.saveGState()
+                ctx.translateBy(x: kcx, y: kcy)
+                ctx.scaleBy(x: 15.0, y: 10.5)
+                drawRadialGlow(in: ctx, center: .zero, radius: 1.0,
+                               color: mqCol.withAlphaComponent(min(1.0, bloom * 135.0 / 255.0)))
+                ctx.restoreGState()
+            }
 
             if showLegends {
                 let isSpace = cap.key == .space
@@ -397,16 +469,25 @@ enum CatRenderer {
     private static func drawTail(in ctx: CGContext, seatX: CGFloat, seatY: CGFloat, physics: CatPhysics, coat: CatCoatTheme) {
         let p = physics.tailPhase
         let hunt = max(0, min(1, physics.huntIntensity.value))
-        let wag1 = sin(p) * (8.0 + hunt * 5.5)
-        let wag2 = cos(p * 1.3) * (6.0 + hunt * 4.5)
+        let agility = max(0, min(1, physics.tailAgility.value))
+        let wag1 = sin(p) * (8.0 + hunt * 5.5 + agility * 4.0)
+        let wag2 = cos(p * 1.3) * (6.0 + hunt * 4.5 + agility * 3.5)
         // Tail drops lower & swishes tautly when stalking/hunting!
         let huntDrop = hunt * 14.0
 
         // Signature low sweep out to the right, then playful upward curl at the tip!
         let root = CGPoint(x: seatX + 34, y: seatY - 6)
-        let c1 = CGPoint(x: seatX + 64, y: seatY + 2 + wag1 * 0.35 + huntDrop * 0.4)
-        let c2 = CGPoint(x: seatX + 66 + wag2 * 0.4, y: seatY - 26 + wag1 * 0.7 + huntDrop)
-        let tip = CGPoint(x: seatX + 91 + wag2 * 0.5, y: seatY - 30 + wag1 * 0.85 + huntDrop)
+        let reach = max(0, min(1, physics.tailTyping.value))
+        let target = physics.tailTip.point
+        let flickScale = 1.0 - reach
+        let fx = physics.tailFlick.point.x * flickScale
+        let fy = physics.tailFlick.point.y * flickScale
+        let curl = physics.tailCurl.value * flickScale
+        let c1 = CGPoint(x: seatX + 64 + 12 * reach + fx * 0.25, y: seatY + 2 + wag1 * 0.35 + huntDrop * 0.4 - 18 * reach + fy * 0.22 + curl * 0.35)
+        let idleC2 = CGPoint(x: seatX + 66 + wag2 * 0.4 + fx * 0.65 - curl * 0.45, y: seatY - 26 + wag1 * 0.7 + huntDrop + fy * 0.60 - curl * 0.55)
+        let idleTip = CGPoint(x: seatX + 91 + wag2 * 0.5 + fx, y: seatY - 30 + wag1 * 0.85 + huntDrop + fy)
+        let c2 = CGPoint(x: idleC2.x + (target.x + 24 - idleC2.x) * reach, y: idleC2.y + (target.y - 30 - idleC2.y) * reach)
+        let tip = CGPoint(x: idleTip.x + (target.x - idleTip.x) * reach, y: idleTip.y + (target.y - idleTip.y) * reach)
 
         ctx.saveGState()
         let tailColor = earTailColor(coat)
@@ -1539,6 +1620,25 @@ enum CatRenderer {
         p.addArc(tangent1End: tl, tangent2End: tr, radius: radius)
         p.closeSubpath()
         return p
+    }
+
+    /// HSV → RGB, used by the keyboard marquee for its one-hue-cycle-per-sweep backlight.
+    private static func hsvColor(hue h: CGFloat, saturation s: CGFloat, value v: CGFloat) -> NSColor {
+        var hue = h.truncatingRemainder(dividingBy: 1.0)
+        if hue < 0 { hue += 1 }
+        let c = v * s
+        let x = c * (1 - abs((hue * 6.0).truncatingRemainder(dividingBy: 2.0) - 1))
+        let m = v - c
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0
+        switch Int(hue * 6.0) % 6 {
+        case 0: r = c; g = x
+        case 1: r = x; g = c
+        case 2: g = c; b = x
+        case 3: g = x; b = c
+        case 4: r = x; b = c
+        default: r = c; b = x
+        }
+        return NSColor(calibratedRed: r + m, green: g + m, blue: b + m, alpha: 1.0)
     }
 
     private static func blendColor(_ a: NSColor, _ b: NSColor, t: CGFloat) -> NSColor {

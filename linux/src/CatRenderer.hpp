@@ -51,8 +51,8 @@ public:
         };
 
         drawMouse(cr, physics, settings.keyboardTheme);
-        drawKeyboard(cr, physics, settings.keyboardTheme, settings.eyeTheme, settings.showKeyLegends);
-        drawTail(cr, seatX, seatY, physics, settings.coatTheme);
+        drawKeyboard(cr, physics, settings.keyboardTheme, settings.eyeTheme, settings.showKeyLegends, settings.keyboardMarquee);
+        if (physics.tailTyping.value < 0.5f) drawTail(cr, seatX, seatY, physics, settings.coatTheme);
         drawEarsLayer(cr, headCenter, physics, settings.coatTheme);
         drawUnifiedSilhouette(cr, seatX, seatY, headCenter, breath, physics, settings.coatTheme);
 
@@ -62,6 +62,8 @@ public:
 
         drawHeadFeatures(cr, headCenter, physics, settings.eyeTheme, settings.coatTheme);
         drawFrontPaws(cr, seatX, seatY, breath, physics, settings.coatTheme);
+
+        if (physics.tailTyping.value >= 0.5f) drawTail(cr, seatX, seatY, physics, settings.coatTheme);
 
         if (!physics.floatingKeycaps.empty()) {
             drawFloatingKeycaps(cr, physics);
@@ -162,6 +164,23 @@ private:
     static RGBA blend(RGBA a, RGBA b, double t) {
         t = std::clamp(t, 0.0, 1.0);
         return { a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t };
+    }
+
+    // Hue wheel helper for the keyboard marquee (one full hue cycle per sweep).
+    static RGBA hsvColor(double h, double s, double v) {
+        h = h - std::floor(h);
+        double c = v * s;
+        double x = c * (1.0 - std::fabs(std::fmod(h * 6.0, 2.0) - 1.0));
+        double m = v - c, r = 0, g = 0, b = 0;
+        switch ((int)(h * 6.0) % 6) {
+            case 0: r = c; g = x; break;
+            case 1: r = x; g = c; break;
+            case 2: g = c; b = x; break;
+            case 3: g = x; b = c; break;
+            case 4: r = x; b = c; break;
+            default: r = c; b = x; break;
+        }
+        return { r + m, g + m, b + m, 1.0 };
     }
 
     static void quadCurveTo(cairo_t* cr, double x0, double y0, double cx, double cy, double x2, double y2) {
@@ -313,7 +332,7 @@ private:
         }
     }
 
-    static void drawKeyboard(cairo_t* cr, const CatPhysics& physics, KeyboardTheme theme, EyeColorTheme eyeTheme, bool showLegends) {
+    static void drawKeyboard(cairo_t* cr, const CatPhysics& physics, KeyboardTheme theme, EyeColorTheme eyeTheme, bool showLegends, bool marquee) {
         Pt tl = KeyboardLayout::screenQuadPoint(-0.012f, -0.04f);
         Pt tr = KeyboardLayout::screenQuadPoint(1.012f, -0.04f);
         Pt bl = KeyboardLayout::screenQuadPoint(-0.016f, 1.04f);
@@ -354,6 +373,43 @@ private:
         constexpr float padV = 0.014f;
         RGBA glowCol = eyePrimary(eyeTheme);
 
+        // Marquee backlight: a comet of light sweeps diagonally under the keycaps.
+        float mqHead = physics.marqueePhase - std::floor(physics.marqueePhase);
+        RGBA mqCol = hsvColor(mqHead + 0.52f, 0.55f, 1.0f);
+        auto mqWave = [mqHead, marquee](float t) {
+            if (!marquee) return 0.0f;
+            float d = mqHead - t;
+            if (d < 0.0f) d += 1.0f;
+            return std::exp(-d / 0.125f);
+        };
+        float bandDx = br.x - tl.x, bandDy = br.y - tl.y;
+        float bandLen2 = bandDx * bandDx + bandDy * bandDy;
+        if (marquee) {
+            cairo_save(cr);
+            drawQuadPath(cr, tl, tr, br, bl);
+            cairo_clip(cr);
+            cairo_pattern_t* band = cairo_pattern_create_linear(tl.x, tl.y, br.x, br.y);
+            for (int i = 0; i < 24; ++i) {
+                float t = (float)i / 23.0f;
+                cairo_pattern_add_color_stop_rgba(band, t, mqCol.r, mqCol.g, mqCol.b,
+                                                  std::min(1.0f, mqWave(t) * 0.80f));
+            }
+            cairo_set_source(cr, band);
+            cairo_paint(cr);
+            cairo_pattern_destroy(band);
+            // White-hot lamp at the head of the comet.
+            Pt head = {tl.x + bandDx * mqHead, tl.y + bandDy * mqHead};
+            double hr = 44.0;
+            cairo_pattern_t* lamp = cairo_pattern_create_radial(head.x, head.y, 0, head.x, head.y, hr);
+            cairo_pattern_add_color_stop_rgba(lamp, 0, 0.94, 0.99, 1.0, 0.58);
+            cairo_pattern_add_color_stop_rgba(lamp, 1, mqCol.r, mqCol.g, mqCol.b, 0.0);
+            cairo_set_source(cr, lamp);
+            cairo_arc(cr, head.x, head.y, hr, 0, PI * 2.0);
+            cairo_fill(cr);
+            cairo_pattern_destroy(lamp);
+            cairo_restore(cr);
+        }
+
         for (const auto& cap : KeyboardLayout::keycaps()) {
             float glow = 0.0f;
             auto it = physics.keyGlow.find(cap.key);
@@ -370,15 +426,47 @@ private:
             Pt kBR = KeyboardLayout::screenQuadPoint(su1, sv1); kBR.y += dy;
             Pt kBL = KeyboardLayout::screenQuadPoint(su0, sv1); kBL.y += dy;
 
+            // Where this keycap sits along the marquee axis, and how bright the comet makes it.
+            double kcx = (kTL.x + kTR.x + kBR.x + kBL.x) * 0.25;
+            double kcy = (kTL.y + kTR.y + kBR.y + kBL.y) * 0.25;
+            float kt = std::clamp((float)(((kcx - tl.x) * bandDx + (kcy - tl.y) * bandDy) / bandLen2), 0.0f, 1.0f);
+            float mq = mqWave(kt);
+
             drawQuadPath(cr, kTL, kTR, kBR, kBL);
             RGBA fill = cap.isAmberAccent ? accentCol : keyCol;
+            if (mq > 0.015f) {
+                // Head of the comet reads hot (near white), the trailing keys stay saturated.
+                RGBA lit = blend(mqCol, {1.0, 1.0, 1.0, 1.0}, mq * mq * 0.5f);
+                fill = blend(fill, lit, std::min(0.9f, mq * 0.88f));
+            }
             if (glow > 0.02f) fill = blend(fill, glowCol, glow * 0.55);
 
             setCol(cr, fill);
             cairo_fill_preserve(cr);
-            setCol(cr, borderCol);
-            cairo_set_line_width(cr, 0.65);
+            if (mq > 0.10f) {
+                cairo_set_source_rgba(cr, mqCol.r, mqCol.g, mqCol.b, std::min(0.84f, mq * 0.84f));
+                cairo_set_line_width(cr, 1.0);
+            } else {
+                setCol(cr, borderCol);
+                cairo_set_line_width(cr, 0.65);
+            }
             cairo_stroke(cr);
+
+            // Under-key bloom where the beam is hottest, so the light spills between caps.
+            if (mq > 0.45f) {
+                double bloom = (mq - 0.45) / 0.55;
+                cairo_save(cr);
+                cairo_translate(cr, kcx, kcy);
+                cairo_scale(cr, 15.0, 10.5);
+                cairo_pattern_t* pb = cairo_pattern_create_radial(0, 0, 0, 0, 0, 1);
+                cairo_pattern_add_color_stop_rgba(pb, 0, mqCol.r, mqCol.g, mqCol.b, 0.53 * bloom);
+                cairo_pattern_add_color_stop_rgba(pb, 1, mqCol.r, mqCol.g, mqCol.b, 0.0);
+                cairo_set_source(cr, pb);
+                cairo_arc(cr, 0, 0, 1, 0, PI * 2.0);
+                cairo_fill(cr);
+                cairo_pattern_destroy(pb);
+                cairo_restore(cr);
+            }
 
             if (showLegends) {
                 bool isSpace = (cap.key == PhysicalKey::Space);
@@ -434,8 +522,9 @@ private:
     static void drawTail(cairo_t* cr, float seatX, float seatY, const CatPhysics& physics, CatCoatTheme coat) {
         float p = physics.tailPhase;
         float hunt = std::clamp(physics.huntIntensity.value, 0.0f, 1.0f);
-        float wag1 = std::sin(p) * (8.0f + hunt * 5.5f);
-        float wag2 = std::cos(p * 1.3f) * (6.0f + hunt * 4.5f);
+        float agility = std::clamp(physics.tailAgility.value, 0.0f, 1.0f);
+        float wag1 = std::sin(p) * (8.0f + hunt * 5.5f + agility * 4.0f);
+        float wag2 = std::cos(p * 1.3f) * (6.0f + hunt * 4.5f + agility * 3.5f);
         float huntDrop = hunt * 14.0f;
 
         cairo_save(cr);
@@ -444,20 +533,27 @@ private:
         cairo_set_line_width(cr, coat == CatCoatTheme::Siamese ? 9.5 : 11.0);
         cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
         cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+        double reach = std::clamp(physics.tailTyping.value, 0.0f, 1.0f);
+        double flickScale = 1.0 - reach;
+        Pt flick = physics.tailFlick.point();
+        double fx = flick.x * flickScale;
+        double fy = flick.y * flickScale;
+        double curl = physics.tailCurl.value * flickScale;
+        Pt target = physics.tailTip.point();
+        double x1=seatX+64+12*reach+fx*0.25, y1=seatY+2+wag1*0.35+huntDrop*0.4-18*reach+fy*0.22+curl*0.35;
+        double x2=seatX+66+wag2*0.4+fx*0.65-curl*0.45, y2=seatY-26+wag1*0.7+huntDrop+fy*0.60-curl*0.55;
+        double x3=seatX+91+wag2*0.5+fx, y3=seatY-30+wag1*0.85+huntDrop+fy;
+        x2+=(target.x+24-x2)*reach; y2+=(target.y-30-y2)*reach;
+        x3+=(target.x-x3)*reach; y3+=(target.y-y3)*reach;
         cairo_move_to(cr, seatX + 34.0, seatY - 6.0);
-        cairo_curve_to(cr,
-            seatX + 64.0, seatY + 2.0 + wag1 * 0.35 + huntDrop * 0.4,
-            seatX + 66.0 + wag2 * 0.4, seatY - 26.0 + wag1 * 0.7 + huntDrop,
-            seatX + 91.0 + wag2 * 0.5, seatY - 30.0 + wag1 * 0.85 + huntDrop);
+        cairo_curve_to(cr, x1, y1, x2, y2, x3, y3);
         cairo_stroke(cr);
         if (patterned(coat)) {
             cairo_set_operator(cr,CAIRO_OPERATOR_ATOP);
             setCol(cr,rgb(coat==CatCoatTheme::Shorthair ? 0x55595A : 0xA57543,0.50));
             cairo_set_line_width(cr,3.5);cairo_set_line_cap(cr,CAIRO_LINE_CAP_BUTT);
             double x0=seatX+34,y0=seatY-6;
-            double x1=seatX+64,y1=seatY+2+wag1*0.35+huntDrop*0.4;
-            double x2=seatX+66+wag2*0.4,y2=seatY-26+wag1*0.7+huntDrop;
-            double x3=seatX+91+wag2*0.5,y3=seatY-30+wag1*0.85+huntDrop;
+            // Use the same curved tail for the coat rings while reaching a key.
             for (double t: {0.50,0.78}) {
                 double u=1-t,x=u*u*u*x0+3*u*u*t*x1+3*u*t*t*x2+t*t*t*x3;
                 double y=u*u*u*y0+3*u*u*t*y1+3*u*t*t*y2+t*t*t*y3;

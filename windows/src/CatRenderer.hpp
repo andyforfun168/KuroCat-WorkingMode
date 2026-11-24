@@ -58,10 +58,9 @@ public:
         drawMouse(g, physics, settings.keyboardTheme);
 
         // 2. Mini 65% Mechanical Keyboard (facing cat) + Backlit Glow
-        drawKeyboard(g, physics, settings.keyboardTheme, settings.eyeTheme, settings.showKeyLegends);
+        drawKeyboard(g, physics, settings.keyboardTheme, settings.eyeTheme, settings.showKeyLegends, settings.keyboardMarquee);
 
-        // 3. Tail
-        drawTail(g, seatX, seatY, physics, settings.coatTheme);
+        if (physics.tailTyping.value < 0.5f) drawTail(g, seatX, seatY, physics, settings.coatTheme);
 
         // 4. 3D-Projected Ears (behind crown silhouette)
         drawEarsLayer(g, headCenter, physics, settings.coatTheme);
@@ -79,6 +78,8 @@ public:
 
         // 8. Front Paws (Idle Sitting & Dynamic Reaching)
         drawFrontPaws(g, seatX, seatY, breath, physics, settings.coatTheme);
+
+        if (physics.tailTyping.value >= 0.5f) drawTail(g, seatX, seatY, physics, settings.coatTheme);
 
         // 9. Floating Keycap Badges (keyboard + mouse clicks)
         if (!physics.floatingKeycaps.empty()) {
@@ -174,6 +175,24 @@ private:
         t = std::clamp(t, 0.0f, 1.0f);
         auto lerp = [t](BYTE x, BYTE y) -> BYTE { return (BYTE)std::clamp((int)(x + (y - x) * t + 0.5f), 0, 255); };
         return Gdiplus::Color(lerp(a.GetA(), b.GetA()), lerp(a.GetR(), b.GetR()), lerp(a.GetG(), b.GetG()), lerp(a.GetB(), b.GetB()));
+    }
+
+    // Hue wheel helper for the keyboard marquee (one full hue cycle per sweep).
+    static Gdiplus::Color hsvColor(float h, float s, float v, BYTE a = 255) {
+        h = h - std::floor(h);
+        float c = v * s;
+        float x = c * (1.0f - std::fabs(std::fmod(h * 6.0f, 2.0f) - 1.0f));
+        float m = v - c;
+        float r = 0.0f, g = 0.0f, b = 0.0f;
+        switch ((int)(h * 6.0f) % 6) {
+            case 0: r = c; g = x; break;
+            case 1: r = x; g = c; break;
+            case 2: g = c; b = x; break;
+            case 3: g = x; b = c; break;
+            case 4: r = x; b = c; break;
+            default: r = c; b = x; break;
+        }
+        return Gdiplus::Color(a, (BYTE)((r + m) * 255.0f), (BYTE)((g + m) * 255.0f), (BYTE)((b + m) * 255.0f));
     }
 
     static void addRoundedRect(Gdiplus::GraphicsPath& p, float x, float y, float w, float h, float r) {
@@ -302,7 +321,7 @@ private:
         }
     }
 
-    static void drawKeyboard(Gdiplus::Graphics& g, const CatPhysics& physics, KeyboardTheme theme, EyeColorTheme eyeTheme, bool showLegends) {
+    static void drawKeyboard(Gdiplus::Graphics& g, const CatPhysics& physics, KeyboardTheme theme, EyeColorTheme eyeTheme, bool showLegends, bool marquee) {
         using namespace Gdiplus;
         Pt tl = KeyboardLayout::screenQuadPoint(-0.012f, -0.04f);
         Pt tr = KeyboardLayout::screenQuadPoint(1.012f, -0.04f);
@@ -339,18 +358,62 @@ private:
             g.FillPath(&bb, &lp);
             g.DrawPath(&bp, &lp);
         }
+        GraphicsPath deckPath;
+        addQuadPoly(deckPath, tl, tr, br, bl);
         {
-            GraphicsPath tp;
-            addQuadPoly(tp, tl, tr, br, bl);
             SolidBrush db(deckCol);
             Pen dp(deckCol, 2.0f); dp.SetLineJoin(LineJoinRound);
-            g.FillPath(&db, &tp);
-            g.DrawPath(&dp, &tp);
+            g.FillPath(&db, &deckPath);
+            g.DrawPath(&dp, &deckPath);
+        }
+
+        // MARK: - Marquee backlight
+        // A comet of light sweeps diagonally under the keycaps: bright head, long fading tail.
+        Color glowCol = eyePrimary(eyeTheme, 215);
+        float mqHead = physics.marqueePhase - std::floor(physics.marqueePhase);
+        // One full hue cycle per sweep, so the deck reads as RGB backlight rather than paint.
+        Color mqCol = hsvColor(mqHead + 0.52f, 0.55f, 1.0f);
+        auto mqWave = [mqHead, marquee](float t) {
+            if (!marquee) return 0.0f;
+            float d = mqHead - t;
+            if (d < 0.0f) d += 1.0f;
+            return std::exp(-d / 0.125f);
+        };
+        float bandDx = br.x - tl.x, bandDy = br.y - tl.y;
+        float bandLen2 = bandDx * bandDx + bandDy * bandDy;
+        if (marquee) {
+            GraphicsState mqState = g.Save();
+            g.SetClip(&deckPath);
+            const int kN = 24;
+            Color mqColors[kN];
+            REAL mqPos[kN];
+            for (int i = 0; i < kN; ++i) {
+                float t = (float)i / (float)(kN - 1);
+                mqPos[i] = t;
+                mqColors[i] = Color((BYTE)std::clamp(mqWave(t) * 200.0f, 0.0f, 255.0f),
+                                    mqCol.GetR(), mqCol.GetG(), mqCol.GetB());
+            }
+            LinearGradientBrush band(PointF(tl.x, tl.y), PointF(br.x, br.y), Color(0, 0, 0, 0), Color(0, 0, 0, 0));
+            band.SetInterpolationColors(mqColors, mqPos, kN);
+            g.FillPath(&band, &deckPath);
+
+            // White-hot lamp at the head of the comet, clipped to the deck.
+            Pt head = { tl.x + bandDx * mqHead, tl.y + bandDy * mqHead };
+            float hr = 44.0f;
+            GraphicsPath hp;
+            hp.AddEllipse(head.x - hr, head.y - hr, hr * 2.0f, hr * 2.0f);
+            PathGradientBrush hb(&hp);
+            hb.SetCenterPoint(PointF(head.x, head.y));
+            hb.SetCenterColor(Color(150, 240, 252, 255));
+            Color hSurr[1] = { Color(0, mqCol.GetR(), mqCol.GetG(), mqCol.GetB()) };
+            INT hCnt = 1;
+            hb.SetSurroundColors(hSurr, &hCnt);
+            g.FillPath(&hb, &hp);
+            g.Restore(mqState);
         }
 
         constexpr float padU = 0.0028f;
         constexpr float padV = 0.014f;
-        Color glowCol = eyePrimary(eyeTheme, 215);
         Pen keyBorderPen(borderCol, 0.65f);
         FontFamily kbFF(L"Segoe UI");
         StringFormat kbSF;
@@ -374,14 +437,47 @@ private:
             Pt kBR = KeyboardLayout::screenQuadPoint(su1, sv1); kBR.y += dy;
             Pt kBL = KeyboardLayout::screenQuadPoint(su0, sv1); kBL.y += dy;
 
+            // Where this keycap sits along the marquee axis, and how bright the comet makes it.
+            float kcx = (kTL.x + kTR.x + kBR.x + kBL.x) * 0.25f;
+            float kcy = (kTL.y + kTR.y + kBR.y + kBL.y) * 0.25f;
+            float kt = std::clamp(((kcx - tl.x) * bandDx + (kcy - tl.y) * bandDy) / bandLen2, 0.0f, 1.0f);
+            float mq = mqWave(kt);
+
             GraphicsPath kp;
             addQuadPoly(kp, kTL, kTR, kBR, kBL);
             Color fill = cap.isAmberAccent ? accentCol : keyCol;
+            if (mq > 0.015f) {
+                // Head of the comet reads hot (near white), the trailing keys stay saturated.
+                Color lit = blendColor(mqCol, Color(255, 255, 255, 255), mq * mq * 0.5f);
+                fill = blendColor(fill, lit, std::clamp(mq * 0.88f, 0.0f, 0.9f));
+            }
             if (glow > 0.02f) fill = blendColor(fill, glowCol, glow * 0.55f);
 
             SolidBrush kb(fill);
             g.FillPath(&kb, &kp);
-            g.DrawPath(&keyBorderPen, &kp);
+            if (mq > 0.10f) {
+                Pen litPen(Color((BYTE)std::clamp(mq * 215.0f, 0.0f, 215.0f),
+                                 mqCol.GetR(), mqCol.GetG(), mqCol.GetB()), 1.0f);
+                g.DrawPath(&litPen, &kp);
+            } else {
+                g.DrawPath(&keyBorderPen, &kp);
+            }
+
+            // Under-key bloom where the beam is hottest, so the light spills between caps.
+            if (mq > 0.45f) {
+                float bloom = (mq - 0.45f) / 0.55f;
+                float br2 = 15.0f;
+                GraphicsPath bp;
+                bp.AddEllipse(kcx - br2, kcy - br2 * 0.7f, br2 * 2.0f, br2 * 1.4f);
+                PathGradientBrush pb(&bp);
+                pb.SetCenterPoint(PointF(kcx, kcy));
+                pb.SetCenterColor(Color((BYTE)std::clamp(bloom * 135.0f, 0.0f, 135.0f),
+                                        mqCol.GetR(), mqCol.GetG(), mqCol.GetB()));
+                Color bSurr[1] = { Color(0, mqCol.GetR(), mqCol.GetG(), mqCol.GetB()) };
+                INT bCnt = 1;
+                pb.SetSurroundColors(bSurr, &bCnt);
+                g.FillPath(&pb, &bp);
+            }
 
             if (showLegends) {
                 bool isSpace = (cap.key == PhysicalKey::Space);
@@ -436,14 +532,30 @@ private:
         using namespace Gdiplus;
         float p = physics.tailPhase;
         float hunt = std::clamp(physics.huntIntensity.value, 0.0f, 1.0f);
-        float wag1 = std::sin(p) * (8.0f + hunt * 5.5f);
-        float wag2 = std::cos(p * 1.3f) * (6.0f + hunt * 4.5f);
+        float agility = std::clamp(physics.tailAgility.value, 0.0f, 1.0f);
+        float wag1 = std::sin(p) * (8.0f + hunt * 5.5f + agility * 4.0f);
+        float wag2 = std::cos(p * 1.3f) * (6.0f + hunt * 4.5f + agility * 3.5f);
         float huntDrop = hunt * 14.0f;
 
+        float reach = std::clamp(physics.tailTyping.value, 0.0f, 1.0f);
+        float flickScale = 1.0f - reach;
+        Pt flick = physics.tailFlick.point();
+        float fx = flick.x * flickScale;
+        float fy = flick.y * flickScale;
+        float curl = physics.tailCurl.value * flickScale;
+
         PointF root(seatX + 34.0f, seatY - 6.0f);
-        PointF c1(seatX + 64.0f, seatY + 2.0f + wag1 * 0.35f + huntDrop * 0.4f);
-        PointF c2(seatX + 66.0f + wag2 * 0.4f, seatY - 26.0f + wag1 * 0.7f + huntDrop);
-        PointF tip(seatX + 91.0f + wag2 * 0.5f, seatY - 30.0f + wag1 * 0.85f + huntDrop);
+        PointF c1(seatX + 64.0f + fx * 0.25f, seatY + 2.0f + wag1 * 0.35f + huntDrop * 0.4f + fy * 0.22f + curl * 0.35f);
+        PointF c2(seatX + 66.0f + wag2 * 0.4f + fx * 0.65f - curl * 0.45f, seatY - 26.0f + wag1 * 0.7f + huntDrop + fy * 0.60f - curl * 0.55f);
+        PointF tip(seatX + 91.0f + wag2 * 0.5f + fx, seatY - 30.0f + wag1 * 0.85f + huntDrop + fy);
+
+        Pt target = physics.tailTip.point();
+        c1.X += 12.0f * reach;
+        c1.Y -= 18.0f * reach;
+        c2.X += (target.x + 24.0f - c2.X) * reach;
+        c2.Y += (target.y - 30.0f - c2.Y) * reach;
+        tip.X += (target.x - tip.X) * reach;
+        tip.Y += (target.y - tip.Y) * reach;
 
         Pen tailPen(earTailColor(coat), coat == CatCoatTheme::Siamese ? 9.5f : 11.0f);
         tailPen.SetStartCap(LineCapRound);

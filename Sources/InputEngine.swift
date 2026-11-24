@@ -54,6 +54,18 @@ final class InputEngine {
     private var eventTapRunLoopSource: CFRunLoopSource?
     private var localMonitor: Any?
     private var permissionCheckTimer: Timer?
+    private var workspaceObservers: [NSObjectProtocol] = []
+    private var lastReconcileTime: CFTimeInterval = 0
+
+    private static let keyToCGCodes: [PhysicalKey: [CGKeyCode]] = {
+        var map: [PhysicalKey: [CGKeyCode]] = [:]
+        for code: UInt16 in 0..<128 {
+            if let key = PhysicalKey.fromCGKeyCode(code) {
+                map[key, default: []].append(CGKeyCode(code))
+            }
+        }
+        return map
+    }()
 
     private(set) var isHIDActive = false
     private(set) var isTapActive = false
@@ -103,6 +115,19 @@ final class InputEngine {
         tryStartEventTap()
         notifyStatus()
 
+        let wsCenter = NSWorkspace.shared.notificationCenter
+        let resetNames: [NSNotification.Name] = [
+            NSWorkspace.willSleepNotification,
+            NSWorkspace.screensDidSleepNotification,
+            NSWorkspace.sessionDidResignActiveNotification
+        ]
+        for name in resetNames {
+            let obs = wsCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.resetAllKeys()
+            }
+            workspaceObservers.append(obs)
+        }
+
         // Periodically check if the user just granted Input Monitoring permission
         permissionCheckTimer?.invalidate()
         let timer = Timer(timeInterval: 1.5, repeats: true) { [weak self] _ in
@@ -141,6 +166,11 @@ final class InputEngine {
     func stop() {
         permissionCheckTimer?.invalidate()
         permissionCheckTimer = nil
+        let wsCenter = NSWorkspace.shared.notificationCenter
+        for obs in workspaceObservers {
+            wsCenter.removeObserver(obs)
+        }
+        workspaceObservers.removeAll()
         stopHID()
         stopEventTap()
         if let m = localMonitor {
@@ -185,6 +215,64 @@ final class InputEngine {
         if recentKeyTimes.count > 120 {
             recentKeyTimes.removeAll { now - $0 > 12.0 }
         }
+        reconcileStuckKeys(now: now)
+    }
+
+    private func isKeyPhysicallyDown(_ key: PhysicalKey) -> Bool {
+        if key == .fn {
+            return CGEventSource.flagsState(.hidSystemState).contains(.maskSecondaryFn)
+        }
+        if key == .capsLock {
+            return CGEventSource.keyState(.hidSystemState, key: 57)
+        }
+        guard let codes = Self.keyToCGCodes[key] else { return false }
+        return codes.contains { CGEventSource.keyState(.hidSystemState, key: $0) }
+    }
+
+    private func reconcileStuckKeys(now: CFTimeInterval) {
+        guard now - lastReconcileTime >= 0.25 else { return }
+        lastReconcileTime = now
+
+        if !activeKeys.isEmpty && (now - lastKeyActivityTime > 0.35) {
+            var stale: [PhysicalKey] = []
+            for key in activeKeys {
+                if !isKeyPhysicallyDown(key) {
+                    stale.append(key)
+                }
+            }
+            if !stale.isEmpty {
+                for key in stale {
+                    hidPressedKeys.remove(key)
+                    tapPressedKeys.remove(key)
+                    pressedOrder.removeAll { $0 == key }
+                }
+                recomputeUnifiedKeys()
+                for key in stale {
+                    onKeyUp?(key)
+                }
+            }
+        }
+
+        if (leftMouseDown || rightMouseDown || otherMouseDown) && (now - lastMouseClickTime > 0.35) {
+            let buttons = NSEvent.pressedMouseButtons
+            if leftMouseDown && (buttons & 1) == 0 { updateMouseButton(0, isDown: false) }
+            if rightMouseDown && (buttons & 2) == 0 { updateMouseButton(1, isDown: false) }
+            if otherMouseDown && (buttons & ~3) == 0 { updateMouseButton(2, isDown: false) }
+        }
+    }
+
+    func resetAllKeys() {
+        let prev = activeKeys
+        hidPressedKeys.removeAll()
+        tapPressedKeys.removeAll()
+        pressedOrder.removeAll()
+        recomputeUnifiedKeys()
+        for key in prev {
+            onKeyUp?(key)
+        }
+        if leftMouseDown { updateMouseButton(0, isDown: false) }
+        if rightMouseDown { updateMouseButton(1, isDown: false) }
+        if otherMouseDown { updateMouseButton(2, isDown: false) }
     }
 
     // MARK: - Layer 1: IOHIDManager (Raw Kernel HID — Best for Games + IME)
@@ -367,8 +455,18 @@ final class InputEngine {
             let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
             let flags = event.flags
             if let key = PhysicalKey.fromCGKeyCode(keyCode) {
-                let isDown = isModifierKeyDown(key: key, flags: flags)
-                setKeyState(key, isDown: isDown, fromHID: false)
+                if key == .capsLock {
+                    // CapsLock's .maskAlphaShift is a lock toggle, not a physical hold.
+                    // When HID is active it tracks exact physical press/release; otherwise
+                    // treat flagsChanged as a brief tap so the paw never sticks on CapsLock.
+                    if !isHIDActive {
+                        setKeyState(.capsLock, isDown: true, fromHID: false)
+                        setKeyState(.capsLock, isDown: false, fromHID: false)
+                    }
+                } else {
+                    let isDown = isModifierKeyDown(key: key, flags: flags)
+                    setKeyState(key, isDown: isDown, fromHID: false)
+                }
             }
             lastModifierFlags = flags
         case .leftMouseDown:
@@ -445,7 +543,7 @@ final class InputEngine {
                 tapPressedKeys.insert(key)
             } else {
                 tapPressedKeys.remove(key)
-                if !isHIDActive {
+                if !isHIDActive || !isKeyPhysicallyDown(key) {
                     hidPressedKeys.remove(key)
                 }
             }
