@@ -308,6 +308,31 @@ int versionToNumber(const std::wstring& v) {
     return parts[0] * 10000 + parts[1] * 100 + parts[2];
 }
 
+void enableBestDpiAwareness() {
+    // 1. Windows 10 1703+: Per-Monitor V2 DPI Awareness (dynamically loaded so Win7/8 won't fail to launch)
+    if (HMODULE hUser32 = GetModuleHandleW(L"user32.dll")) {
+        using SetDpiCtxFn = BOOL(WINAPI*)(HANDLE);
+        auto fn = reinterpret_cast<SetDpiCtxFn>(GetProcAddress(hUser32, "SetProcessDpiAwarenessContext"));
+        if (fn && fn(reinterpret_cast<HANDLE>(static_cast<INT_PTR>(-4)))) {
+            return;
+        }
+    }
+    // 2. Windows 8.1+: Per-Monitor DPI Awareness via shcore.dll
+    if (HMODULE hShcore = LoadLibraryW(L"shcore.dll")) {
+        using SetDpiAwareFn = HRESULT(WINAPI*)(int);
+        auto fn = reinterpret_cast<SetDpiAwareFn>(GetProcAddress(hShcore, "SetProcessDpiAwareness"));
+        bool ok = (fn && SUCCEEDED(fn(2)));
+        FreeLibrary(hShcore);
+        if (ok) return;
+    }
+    // 3. Windows Vista / 7: System DPI Awareness
+    if (HMODULE hUser32 = GetModuleHandleW(L"user32.dll")) {
+        using SetSysDpiFn = BOOL(WINAPI*)();
+        auto fn = reinterpret_cast<SetSysDpiFn>(GetProcAddress(hUser32, "SetProcessDPIAware"));
+        if (fn) fn();
+    }
+}
+
 void registerTrayIcon(AppState& app) {
     if (!app.trayIcon) app.trayIcon = createCatTrayIcon();
     app.nid = {};
