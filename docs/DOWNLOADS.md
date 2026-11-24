@@ -8,11 +8,11 @@
 
 | 系统 / CPU | 下载文件 | 要求 |
 | --- | --- | --- |
-| macOS / Apple Silicon 或 Intel | `KuroCat-macOS-universal.zip` | macOS 13+；一个包包含 arm64 / x86_64 |
+| macOS / Apple Silicon 或 Intel | `KuroCat-macOS-universal.zip` | macOS 11+；一个包包含 arm64 / x86_64 |
 | Windows / Intel 或 AMD 64 位 | `KuroCat-Windows-x64.exe` | Windows 10 / 11 x64 |
-| Debian 系 Linux / Intel 或 AMD 64 位 | `KuroCat-Linux-amd64.deb` | 以 Ubuntu 22.04 为构建基线；由包管理器检查依赖 |
+| Debian 系 Linux / Intel 或 AMD 64 位 | `KuroCat-Linux-amd64.deb` | 以 Debian 10 为构建基线；由包管理器检查依赖 |
 | Debian 系 Linux / ARM64 | `KuroCat-Linux-arm64.deb` | 同上；适用于 ARM64，不是 ARMv7 |
-| 其他 Linux / Intel 或 AMD 64 位 | `KuroCat-Linux-x86_64.tar.gz` | glibc 2.35+ 及兼容的 GTK3、Cairo、X11、Xi、C++ 运行库 |
+| 其他 Linux / Intel 或 AMD 64 位 | `KuroCat-Linux-x86_64.tar.gz` | glibc 2.28+ 及兼容的 GTK3、Cairo、X11、Xi、C++ 运行库 |
 | 其他 Linux / ARM64 | `KuroCat-Linux-arm64.tar.gz` | 同上 |
 
 `Source code (zip/tar.gz)` 是 GitHub 自动生成的源码归档，不是安装包。Windows ARM64、32 位系统、LoongArch 没有本次预编译包。Linux 可用 `uname -m` 确认架构，用 `ldd --version` 查看 glibc。
@@ -41,9 +41,9 @@ sudo apt install ./KuroCat-Linux-amd64.deb
 kurocat
 ```
 
-其他发行版解压对应 tar 包，进入解压目录执行 `./kurocat`。若缺共享库，可执行 `ldd ./kurocat` 查看 `not found` 项，再通过当前发行版的包管理器安装依赖。
+其他发行版解压对应 tar 包，执行 `bash install.sh` 安装到当前用户目录，也可直接运行 `./kurocat`。若缺共享库，可执行 `ldd ./kurocat` 查看 `not found` 项，再通过当前发行版的包管理器安装依赖。
 
-**兼容性边界：**预编译文件在 Ubuntu 22.04 / glibc 2.35 环境构建；Ubuntu 20.04、Debian 11 和旧版 UOS 不保证可用，遇到 `GLIBC_*` / `GLIBCXX_* not found` 请按主页步骤在目标机器源码编译，不要替换系统 libc。UOS / Deepin / 麒麟版本众多，是否能安装以依赖检查为准。
+**兼容性边界：**预编译文件在 Debian 10 / glibc 2.28 环境构建；Ubuntu 20.04、Debian 11 和旧版 UOS 不保证可用，遇到 `GLIBC_*` / `GLIBCXX_* not found` 请按主页步骤在目标机器源码编译，不要替换系统 libc。UOS / Deepin / 麒麟版本众多，是否能安装以依赖检查为准。
 
 X11 是优先使用的桌面会话。Wayland 的全局输入、窗口置顶、定位及穿透行为受 compositor 限制，尚未保证完整兼容；遇到问题请先使用 X11。主页提到的 `input` 组权限仅解决 evdev 设备读取，不能消除所有 Wayland 限制；该组允许读取原始输入设备，授权前请了解其范围。
 
@@ -68,6 +68,6 @@ SHA-256 用于确认文件与本 Release 清单一致，不等同于操作系统
 
 ## 更新、退出与反馈
 
-更新前从菜单退出旧进程，再替换应用或 exe；`.deb` 可重新执行 `apt install`。应用名、bundle ID 继承上游，请避免同时运行上游版和 fork 版。若启用过开机自动启动，移除应用前先在菜单关闭该项。
+本 fork 从 v1.3.6 起移除应用内更新检查、提醒、自动下载与安装。请手动访问本仓库 [GitHub Release](https://github.com/andyforfun168/KuroCatAndy/releases/latest)，退出旧版后替换应用或 exe。Linux tar 包可运行 `bash install.sh` 免密码安装到 `~/.local`，运行 `bash uninstall.sh` 卸载；deb 通过包管理器升级。
 
-问题反馈请注明 Release 版本、下载文件、系统版本、CPU 架构和复现步骤；Linux 补充发行版及 X11/Wayland。不要附带密码、私人输入内容或完整设备输入日志。
+反馈请附版本、系统、CPU、下载文件名和复现步骤，不要附密码或私人输入内容。

@@ -92,7 +92,6 @@ SWIFT_SOURCES=(
     "$ROOT/Sources/CoatPatterns.swift"
     "$ROOT/Sources/CatRenderer.swift"
     "$ROOT/Sources/OverlayWindow.swift"
-    "$ROOT/Sources/UpdateChecker.swift"
     "$ROOT/Sources/AppDelegate.swift"
     "$ROOT/Sources/main.swift"
 )

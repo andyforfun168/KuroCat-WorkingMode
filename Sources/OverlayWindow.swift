@@ -25,8 +25,9 @@ final class CatCanvasView: NSView {
         ctx.saveGState()
         ctx.scaleBy(x: scaleX, y: scaleY)
 
-        let showPill = InputEngine.shared.status == .needsPermission
-        CatRenderer.draw(in: ctx, physics: physics, showPermissionPill: showPill)
+        let status = InputEngine.shared.status
+        CatRenderer.draw(in: ctx, physics: physics, showPermissionPill: status.needsAttention,
+                         permissionPillText: status.permissionPillText)
 
         ctx.restoreGState()
     }
@@ -45,7 +46,7 @@ final class CatCanvasView: NSView {
     func updateHoverAndClickThrough() {
         guard let win = window else { return }
         let screenPt = NSEvent.mouseLocation
-        let showPill = InputEngine.shared.status == .needsPermission
+        let showPill = InputEngine.shared.status.needsAttention
 
         if isDragging {
             win.ignoresMouseEvents = false
@@ -63,12 +64,12 @@ final class CatCanvasView: NSView {
 
         let zone = CatRenderer.hitTest(point: pt, physics: physics, showPermissionPill: showPill)
 
-        // Petting works in both Smart Mode and Full Click-Through Mode!
-        if zone == .head || zone == .body {
+        // Petting triggers strictly on the cat's head (never on keyboard or torso)!
+        if zone == .head {
             if let prev = lastHoverCanvasPt {
                 let delta = hypot(pt.x - prev.x, pt.y - prev.y)
                 if delta > 1.2 && delta < 80 {
-                    physics.registerPetStroke(canvasPoint: pt, delta: delta, isHead: zone == .head)
+                    physics.registerPetStroke(canvasPoint: pt, delta: delta, isHead: true)
                 }
             }
             lastHoverCanvasPt = pt
@@ -111,7 +112,7 @@ final class CatCanvasView: NSView {
     override func mouseDown(with event: NSEvent) {
         guard let win = window else { return }
         let screenPt = NSEvent.mouseLocation
-        let showPill = InputEngine.shared.status == .needsPermission
+        let showPill = InputEngine.shared.status.needsAttention
 
         if let pt = canvasPoint(fromScreenPoint: screenPt) {
             let zone = CatRenderer.hitTest(point: pt, physics: physics, showPermissionPill: showPill)

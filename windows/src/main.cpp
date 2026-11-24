@@ -1,29 +1,58 @@
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
+#ifndef WINVER
+#define WINVER 0x0601
+#endif
 #define NOMINMAX
+#ifndef UNICODE
 #define UNICODE
+#endif
+#ifndef _UNICODE
 #define _UNICODE
+#endif
 #include <windows.h>
 #include <shellapi.h>
 #include <objidl.h>
 #include <gdiplus.h>
+#include <wtsapi32.h>
 #include <string>
+#include <vector>
 #include <cmath>
+#include <cwchar>
 #include <algorithm>
 #include "KeyMap.hpp"
 #include "InputEngine.hpp"
 #include "CatPhysics.hpp"
 #include "CatRenderer.hpp"
-#include "UpdateChecker.hpp"
+
+#ifndef WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY
+#define WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY 4
+#endif
+#ifndef WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_1
+#define WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_1 0x00000200
+#endif
+#ifndef WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2
+#define WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2 0x00000800
+#endif
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "wtsapi32.lib")
 
 namespace {
 
+constexpr const wchar_t* APP_VERSION = L"1.3.6";
+constexpr const wchar_t* VERSION_PROP = L"KuroCatVersion"; // set on the tray owner window so newer builds can take over older ones
+constexpr const wchar_t* TRAY_OWNER_CLASS = L"KuroCatTrayOwnerClass";
+constexpr const wchar_t* OVERLAY_CLASS = L"KuroCatOverlayWindowClass";
+constexpr double FRAME_INTERVAL = 1.0 / 60.0;
 constexpr UINT WM_TRAYICON = WM_APP + 1;
 constexpr UINT WM_WAKE_EXISTING = WM_APP + 2;
+constexpr UINT WM_REQUEST_QUIT = WM_APP + 5; // posted by a newer / elevated instance that is taking over
 constexpr UINT_PTR TIMER_RENDER = 1;
 constexpr int HOTKEY_CLICKTHROUGH_ID = 101;
 UINT g_msgTaskbarCreated = 0;
@@ -34,6 +63,8 @@ enum MenuCmd : UINT {
     CMD_TOGGLE_TOPMOST,
     CMD_TOGGLE_AUTOSTART,
     CMD_TOGGLE_BADGES,
+    CMD_TOGGLE_MOUSE_BADGES,
+    CMD_TOGGLE_KEY_LEGENDS,
     CMD_TOGGLE_FOOT,
     CMD_TOGGLE_PET,
     CMD_COAT_BLACK,
@@ -56,8 +87,8 @@ enum MenuCmd : UINT {
     CMD_SCALE_150,
     CMD_DEMO_BURST,
     CMD_RESET_POS,
-    CMD_CHECK_UPDATE,
-    CMD_AUTO_UPDATE,
+    CMD_RELAUNCH_ADMIN,
+    CMD_TOGGLE_RUN_AS_ADMIN,
     CMD_QUIT
 };
 
@@ -90,6 +121,20 @@ struct AppState {
     bool demoActive = false;
     double demoStartTime = 0.0;
     int demoStepIdx = 0;
+
+
+    // Robustness against games, Win+L, sleep and display changes
+    double nextFrameTime = 0.0;
+    double lastRenderTime = 0.0;
+    double nextHousekeepingTime = 0.0;
+    double pendingTopmostTime = 0.0;
+    int ulwFailures = 0;
+    bool isElevated = false;
+    bool foregroundBlocksKeys = false;   // foreground app runs as admin -> Windows (UIPI) hides its keys from us
+    double lastBlockedForegroundTime = 0.0;
+    bool warnedElevatedForeground = false;
+    HWINEVENTHOOK foregroundHook = nullptr;
+    bool sessionNotifyRegistered = false;
 
     void destroyBuffer() {
         if (memDC && oldBmp) SelectObject(memDC, oldBmp);
@@ -176,6 +221,118 @@ void showTrayBalloon(AppState& app, const wchar_t* title, const wchar_t* body) {
     Shell_NotifyIconW(NIM_MODIFY, &b);
 }
 
+// MARK: - Elevation (UIPI) helpers
+//
+// Many games (and launchers such as WeGame / anti-cheat clients) run as administrator. Windows'
+// User Interface Privilege Isolation then refuses to deliver that window's keystrokes to normal
+// programs — Raw Input, GetAsyncKeyState and low-level hooks all go silent — while mouse movement
+// is still visible. That is exactly the "cat only sees the mouse in games" report. The only fix
+// is for KuroCat to run at the same level, so we detect it and offer an admin relaunch.
+
+bool isCurrentProcessElevated() {
+    HANDLE tok = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) return false;
+    TOKEN_ELEVATION te = {};
+    DWORD sz = 0;
+    bool elevated = GetTokenInformation(tok, TokenElevation, &te, sizeof(te), &sz) && te.TokenIsElevated != 0;
+    CloseHandle(tok);
+    return elevated;
+}
+
+bool isProcessElevatedOrProtected(DWORD pid) {
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!h) return GetLastError() == ERROR_ACCESS_DENIED; // protected / anti-cheat processes
+    bool elevated = false;
+    HANDLE tok = nullptr;
+    if (OpenProcessToken(h, TOKEN_QUERY, &tok)) {
+        TOKEN_ELEVATION te = {};
+        DWORD sz = 0;
+        if (GetTokenInformation(tok, TokenElevation, &te, sizeof(te), &sz)) elevated = te.TokenIsElevated != 0;
+        CloseHandle(tok);
+    } else {
+        elevated = (GetLastError() == ERROR_ACCESS_DENIED);
+    }
+    CloseHandle(h);
+    return elevated;
+}
+
+bool commandLineHasFlag(const wchar_t* flag) {
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (!argv) return false;
+    bool found = false;
+    for (int i = 1; i < argc; ++i) {
+        if (_wcsicmp(argv[i], flag) == 0) { found = true; break; }
+    }
+    LocalFree(argv);
+    return found;
+}
+
+/// Starts a new elevated copy of this exe (UAC prompt). Returns false if the user declined.
+bool relaunchSelfElevated(const wchar_t* params) {
+    wchar_t exe[MAX_PATH * 2] = {};
+    if (GetModuleFileNameW(nullptr, exe, (DWORD)(sizeof(exe) / sizeof(exe[0]) - 1)) == 0) return false;
+    SHELLEXECUTEINFOW sei = {};
+    sei.cbSize = sizeof(sei);
+    sei.fMask = SEE_MASK_NOASYNC;
+    sei.lpVerb = L"runas";
+    sei.lpFile = exe;
+    sei.lpParameters = params;
+    sei.nShow = SW_SHOWNORMAL;
+    return ShellExecuteExW(&sei) != FALSE;
+}
+
+/// True when the foreground window covers its whole monitor (borderless / fullscreen games).
+bool isForegroundFullscreen() {
+    HWND fg = GetForegroundWindow();
+    if (!fg || fg == GetDesktopWindow() || fg == GetShellWindow()) return false;
+    wchar_t cls[64] = {};
+    GetClassNameW(fg, cls, 63);
+    if (wcscmp(cls, L"WorkerW") == 0 || wcscmp(cls, L"Progman") == 0) return false;
+    RECT wr = {};
+    if (!GetWindowRect(fg, &wr)) return false;
+    MONITORINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST), &mi)) return false;
+    return wr.left <= mi.rcMonitor.left && wr.top <= mi.rcMonitor.top &&
+           wr.right >= mi.rcMonitor.right && wr.bottom >= mi.rcMonitor.bottom;
+}
+
+int versionToNumber(const std::wstring& v) {
+    int parts[3] = { 0, 0, 0 };
+    int idx = 0;
+    for (wchar_t c : v) {
+        if (c >= L'0' && c <= L'9') parts[idx] = parts[idx] * 10 + (c - L'0');
+        else if (c == L'.') { if (++idx >= 3) break; }
+    }
+    return parts[0] * 10000 + parts[1] * 100 + parts[2];
+}
+
+void enableBestDpiAwareness() {
+    // 1. Windows 10 1703+: Per-Monitor V2 DPI Awareness (dynamically loaded so Win7/8 won't fail to launch)
+    if (HMODULE hUser32 = GetModuleHandleW(L"user32.dll")) {
+        using SetDpiCtxFn = BOOL(WINAPI*)(HANDLE);
+        auto fn = reinterpret_cast<SetDpiCtxFn>(GetProcAddress(hUser32, "SetProcessDpiAwarenessContext"));
+        if (fn && fn(reinterpret_cast<HANDLE>(static_cast<INT_PTR>(-4)))) {
+            return;
+        }
+    }
+    // 2. Windows 8.1+: Per-Monitor DPI Awareness via shcore.dll
+    if (HMODULE hShcore = LoadLibraryW(L"shcore.dll")) {
+        using SetDpiAwareFn = HRESULT(WINAPI*)(int);
+        auto fn = reinterpret_cast<SetDpiAwareFn>(GetProcAddress(hShcore, "SetProcessDpiAwareness"));
+        bool ok = (fn && SUCCEEDED(fn(2)));
+        FreeLibrary(hShcore);
+        if (ok) return;
+    }
+    // 3. Windows Vista / 7: System DPI Awareness
+    if (HMODULE hUser32 = GetModuleHandleW(L"user32.dll")) {
+        using SetSysDpiFn = BOOL(WINAPI*)();
+        auto fn = reinterpret_cast<SetSysDpiFn>(GetProcAddress(hUser32, "SetProcessDPIAware"));
+        if (fn) fn();
+    }
+}
+
 void registerTrayIcon(AppState& app) {
     if (!app.trayIcon) app.trayIcon = createCatTrayIcon();
     app.nid = {};
@@ -222,7 +379,7 @@ void computeDefaultOrigin(int w, int h, int& outX, int& outY) {
     outY = work.bottom - h - 12;
 }
 
-void applyWindowScaleAndPosition(AppState& app, bool anchorBottomCenter) {
+void applyWindowScaleAndPosition(AppState& app, bool anchorBottomCenter, bool persist = true) {
     int newW = (int)std::round(CatPhysics::CanvasWidth * app.settings.scale);
     int newH = (int)std::round(CatPhysics::CanvasHeight * app.settings.scale);
 
@@ -248,11 +405,91 @@ void applyWindowScaleAndPosition(AppState& app, bool anchorBottomCenter) {
         computeDefaultOrigin(newW, newH, x, y);
     }
 
-    app.settings.posX = x;
-    app.settings.posY = y;
     HWND insertAfter = app.settings.alwaysOnTop ? HWND_TOPMOST : HWND_NOTOPMOST;
     SetWindowPos(app.hwnd, insertAfter, x, y, newW, newH, SWP_NOACTIVATE);
-    app.settings.saveToRegistry();
+    if (persist) {
+        app.settings.posX = x;
+        app.settings.posY = y;
+        app.settings.saveToRegistry();
+    }
+}
+
+/// Puts the cat back on top of other topmost windows (borderless/fullscreen games that make
+/// themselves topmost after launching used to bury the cat, which looked like it "vanished").
+void assertTopmost(AppState& app) {
+    if (!app.hwnd || !app.isVisible || !app.settings.alwaysOnTop) return;
+    SetWindowPos(app.hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSENDCHANGING);
+}
+
+/// Full self-repair after Win+L unlock, sleep/resume, display-mode changes (games switching
+/// resolution) or a rendering stall: clears stuck keys, re-registers Raw Input, rebuilds the
+/// layered-window buffer, restarts the frame timer and re-places the window on a visible monitor
+/// WITHOUT overwriting the user's saved position.
+void recoverAfterSystemEvent(AppState& app) {
+    if (!app.hwnd) return;
+    double now = nowSeconds();
+    app.input.resetAllState();
+    app.input.registerRawInput(app.hwnd);
+    app.input.lastMouseMoveTime = now; // wake the cat up so it visibly greets the user again
+    app.destroyBuffer();
+    app.ulwFailures = 0;
+    app.isDragging = false;
+    app.lastTickTime = now;
+    app.nextFrameTime = 0.0;
+    app.lastRenderTime = now;
+    KillTimer(app.hwnd, TIMER_RENDER);
+    SetTimer(app.hwnd, TIMER_RENDER, 16, nullptr);
+    if (app.isVisible) ShowWindow(app.hwnd, SW_SHOWNOACTIVATE);
+    applyWindowScaleAndPosition(app, false, false);
+    app.pendingTopmostTime = now + 1.5; // some games re-assert topmost shortly after a mode switch
+}
+
+/// Once per second: watchdog + game helpers.
+void housekeeping(AppState& app) {
+    double now = nowSeconds();
+    if (now < app.nextHousekeepingTime) return;
+    app.nextHousekeepingTime = now + 1.0;
+    if (!app.hwnd) return;
+
+    // Rendering stalled for >2s while visible (e.g. the layered window lost its surface): self-heal.
+    if (app.isVisible && app.lastRenderTime > 0.0 && now - app.lastRenderTime > 2.0) {
+        recoverAfterSystemEvent(app);
+        return;
+    }
+    if (app.isVisible && !IsWindowVisible(app.hwnd)) ShowWindow(app.hwnd, SW_SHOWNOACTIVATE);
+
+    bool fullscreenFg = isForegroundFullscreen();
+    if (app.pendingTopmostTime > 0.0 && now >= app.pendingTopmostTime) {
+        app.pendingTopmostTime = 0.0;
+        assertTopmost(app);
+    } else if (fullscreenFg) {
+        assertTopmost(app);
+    }
+
+    // Detect admin-level games whose keystrokes Windows withholds from us.
+    app.foregroundBlocksKeys = false;
+    if (!app.isElevated) {
+        HWND fg = GetForegroundWindow();
+        DWORD pid = 0;
+        if (fg) GetWindowThreadProcessId(fg, &pid);
+        if (pid && pid != GetCurrentProcessId() && isProcessElevatedOrProtected(pid)) {
+            app.foregroundBlocksKeys = true;
+            app.lastBlockedForegroundTime = now;
+            if (fullscreenFg && !app.warnedElevatedForeground) {
+                app.warnedElevatedForeground = true;
+                showTrayBalloon(app,
+                    L"KuroCat 听不到这个游戏的键盘",
+                    L"该游戏以管理员权限运行，Windows 会拦截它的键盘输入。右键小猫/托盘图标 →「以管理员身份重新启动」即可恢复。");
+            }
+        }
+    }
+}
+
+void quitApp(AppState& app) {
+    // Destroying the overlay runs the normal WM_DESTROY cleanup (tray icon, hotkey...) and quits.
+    if (app.hwnd && IsWindow(app.hwnd)) DestroyWindow(app.hwnd);
+    else PostQuitMessage(0);
 }
 
 void setClickThrough(HWND hwnd, bool transparent) {
@@ -273,6 +510,9 @@ void showContextMenu(AppState& app, POINT screenPt) {
         ? L"\u25CF \u786C\u4EF6\u7EA7\u5168\u72B6\u6001\u76D1\u542C\u4E2D (Raw Input \u6E38\u620F/\u6253\u5B57)"
         : L"\u26A0 Raw Input \u672A\u542F\u52A8";
     AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, statusStr.c_str());
+    if (!app.isElevated && app.lastBlockedForegroundTime > 0.0 && nowSeconds() - app.lastBlockedForegroundTime < 600.0) {
+        AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, L"⚠ 刚才的游戏以管理员权限运行，键盘被 Windows 拦截了");
+    }
 
     std::wstring stats = L"\u4ECA\u65E5\u51FB\u952E " + std::to_wstring(app.input.totalKeystrokesToday)
         + L"  \u00B7  KPM " + std::to_wstring(app.input.currentKPM())
@@ -284,9 +524,17 @@ void showContextMenu(AppState& app, POINT screenPt) {
     AppendMenuW(menu, MF_STRING | (app.settings.fullClickThrough ? MF_CHECKED : 0), CMD_TOGGLE_CLICKTHROUGH, L"\u5B8C\u5168\u9F20\u6807\u7A7F\u900F (Ctrl+Alt+Shift+P / \u6309\u4F4FAlt\u53EF\u53F3\u952E)");
     AppendMenuW(menu, MF_STRING | (app.settings.alwaysOnTop ? MF_CHECKED : 0), CMD_TOGGLE_TOPMOST, L"\u7A97\u53E3\u7F6E\u9876\u663E\u793A");
     AppendMenuW(menu, MF_STRING | (isAutoStartEnabled() ? MF_CHECKED : 0), CMD_TOGGLE_AUTOSTART, L"\u5F00\u673A\u81EA\u52A8\u542F\u52A8");
+    if (app.isElevated) {
+        AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, L"\u2713 \u5DF2\u4EE5\u7BA1\u7406\u5458\u8EAB\u4EFD\u8FD0\u884C\uFF08\u7BA1\u7406\u5458\u6743\u9650\u6E38\u620F\u7684\u952E\u76D8\u4E5F\u80FD\u76D1\u542C\uFF09");
+    } else {
+        AppendMenuW(menu, MF_STRING, CMD_RELAUNCH_ADMIN, L"\u4EE5\u7BA1\u7406\u5458\u8EAB\u4EFD\u91CD\u65B0\u542F\u52A8\uFF08\u6E38\u620F\u91CC\u952E\u76D8\u6CA1\u53CD\u5E94\u65F6\u70B9\u8FD9\u91CC\uFF09");
+    }
+    AppendMenuW(menu, MF_STRING | (app.settings.runAsAdmin ? MF_CHECKED : 0), CMD_TOGGLE_RUN_AS_ADMIN, L"\u6BCF\u6B21\u542F\u52A8\u90FD\u4EE5\u7BA1\u7406\u5458\u8EAB\u4EFD\u8FD0\u884C");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
     AppendMenuW(menu, MF_STRING | (app.settings.showKeyBadges ? MF_CHECKED : 0), CMD_TOGGLE_BADGES, L"\u663E\u793A\u6309\u952E\u6C14\u6CE1 ([S] [W] [\u21E7])");
+    AppendMenuW(menu, MF_STRING | (app.settings.showMouseBadges ? MF_CHECKED : 0), CMD_TOGGLE_MOUSE_BADGES, L"\u663E\u793A\u9F20\u6807\u70B9\u51FB\u6C14\u6CE1 ([\u5DE6\u952E] [\u53F3\u952E])");
+    AppendMenuW(menu, MF_STRING | (app.settings.showKeyLegends ? MF_CHECKED : 0), CMD_TOGGLE_KEY_LEGENDS, L"\u663E\u793A\u952E\u76D8\u5B57\u7B26");
     AppendMenuW(menu, MF_STRING | (app.settings.footEasterEgg ? MF_CHECKED : 0), CMD_TOGGLE_FOOT, L"3\u952E\u540C\u65F6\u6309\u300C\u7528\u811A\u6309\u300D\u5F69\u86CB");
     AppendMenuW(menu, MF_STRING | (app.settings.petInteraction ? MF_CHECKED : 0), CMD_TOGGLE_PET, L"\u6478\u5934/\u6478\u80CC\u95ED\u773C\u4E92\u52A8");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -330,9 +578,6 @@ void showContextMenu(AppState& app, POINT screenPt) {
     AppendMenuW(menu, MF_STRING, CMD_DEMO_BURST, L"\u6F14\u793A\u6253\u5B57\u52A8\u753B");
     AppendMenuW(menu, MF_STRING, CMD_RESET_POS, L"\u91CD\u7F6E\u4F4D\u7F6E\u5230\u53F3\u4E0B\u89D2");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, CMD_CHECK_UPDATE, L"检查更新…");
-    AppendMenuW(menu, MF_STRING | (KuroWinUpdate::automatic() ? MF_CHECKED : 0), CMD_AUTO_UPDATE, L"自动检查更新（每天一次）");
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, CMD_QUIT, L"\u9000\u51FA KuroCat");
 
     HWND menuOwner = app.menuOwnerHwnd ? app.menuOwnerHwnd : app.hwnd;
@@ -364,6 +609,14 @@ void showContextMenu(AppState& app, POINT screenPt) {
             break;
         case CMD_TOGGLE_BADGES:
             app.settings.showKeyBadges = !app.settings.showKeyBadges;
+            app.settings.saveToRegistry();
+            break;
+        case CMD_TOGGLE_MOUSE_BADGES:
+            app.settings.showMouseBadges = !app.settings.showMouseBadges;
+            app.settings.saveToRegistry();
+            break;
+        case CMD_TOGGLE_KEY_LEGENDS:
+            app.settings.showKeyLegends = !app.settings.showKeyLegends;
             app.settings.saveToRegistry();
             break;
         case CMD_TOGGLE_FOOT:
@@ -414,20 +667,44 @@ void showContextMenu(AppState& app, POINT screenPt) {
             app.settings.posY = -99999;
             applyWindowScaleAndPosition(app, false);
             break;
-        case CMD_CHECK_UPDATE: KuroWinUpdate::check(app.menuOwnerHwnd,true); break;
-        case CMD_AUTO_UPDATE: KuroWinUpdate::toggle(); break;
+        case CMD_RELAUNCH_ADMIN:
+            // The elevated copy starts with --takeover and waits for this one to exit.
+            if (relaunchSelfElevated(L"--takeover --no-elevate")) quitApp(app);
+            break;
+        case CMD_TOGGLE_RUN_AS_ADMIN:
+            app.settings.runAsAdmin = !app.settings.runAsAdmin;
+            app.settings.saveToRegistry();
+            if (app.settings.runAsAdmin && !app.isElevated && relaunchSelfElevated(L"--takeover --no-elevate")) {
+                quitApp(app);
+            }
+            break;
         case CMD_QUIT:
-            PostQuitMessage(0);
+            quitApp(app);
             break;
         default:
             break;
     }
 }
 
+bool physicsLooksSane(const CatPhysics& p) {
+    const float vals[] = {
+        p.leftPaw.x.value, p.leftPaw.y.value, p.rightPaw.x.value, p.rightPaw.y.value,
+        p.hindFoot.x.value, p.hindFoot.y.value, p.bodyShiftX.value, p.bodyTilt.value,
+        p.bodySquash.value, p.headTilt.value, p.headYaw.value, p.headPitch.value,
+        p.headOffsetY.value, p.eyeGaze.x.value, p.eyeGaze.y.value, p.pupilScale.value,
+        p.huntIntensity.value, p.mouseOffset.x.value, p.mouseOffset.y.value, p.time
+    };
+    for (float v : vals) {
+        if (!std::isfinite(v) || std::fabs(v) > 1.0e6f) return false;
+    }
+    return true;
+}
+
 void tickAndRender(AppState& app) {
     if (!app.isVisible || !app.hwnd) return;
 
     double now = nowSeconds();
+    app.lastRenderTime = now;
     float dt = (float)(now - app.lastTickTime);
     app.lastTickTime = now;
     if (dt <= 0.0f || dt > 0.2f) dt = 1.0f / 60.0f;
@@ -453,6 +730,13 @@ void tickAndRender(AppState& app) {
     int h = std::max(1, (int)(wr.bottom - wr.top));
 
     app.physics.step(dt, wr, app.input, app.settings);
+    if (!physicsLooksSane(app.physics)) {
+        // A single non-finite value would otherwise make every later frame draw nothing (the cat
+        // "vanishes" until restart). Rebuild the pose but keep the session statistics.
+        int pets = app.physics.totalPetSessions;
+        app.physics = CatPhysics();
+        app.physics.totalPetSessions = pets;
+    }
 
     // Smart Click-Through + Petting Detection
     if (!app.isDragging) {
@@ -463,12 +747,12 @@ void tickAndRender(AppState& app) {
                 (float)(cur.x - wr.left) / (float)w * CatPhysics::CanvasWidth,
                 (float)(cur.y - wr.top)  / (float)h * CatPhysics::CanvasHeight
             };
-            CatHitZone zone = CatRenderer::hitTest(cp, app.physics);
-            if (zone == CatHitZone::Head || zone == CatHitZone::Body) {
+            CatHitZone zone = CatRenderer::hitTest(cp, app.physics, app.settings.coatTheme);
+            if (zone == CatHitZone::Head) {
                 if (app.hasLastHover) {
                     float d = std::hypot(cp.x - app.lastHoverCanvas.x, cp.y - app.lastHoverCanvas.y);
                     if (d > 1.2f && d < 80.0f) {
-                        app.physics.registerPetStroke(cp, d, zone == CatHitZone::Head, app.settings);
+                        app.physics.registerPetStroke(cp, d, true, app.settings);
                     }
                 }
                 app.lastHoverCanvas = cp;
@@ -505,22 +789,74 @@ void tickAndRender(AppState& app) {
     blend.AlphaFormat = AC_SRC_ALPHA;
 
     HDC screenDC = GetDC(nullptr);
-    UpdateLayeredWindow(app.hwnd, screenDC, &ptDst, &szWnd, app.memDC, &ptSrc, 0, &blend, ULW_ALPHA);
+    BOOL presented = UpdateLayeredWindow(app.hwnd, screenDC, &ptDst, &szWnd, app.memDC, &ptSrc, 0, &blend, ULW_ALPHA);
     ReleaseDC(nullptr, screenDC);
+    if (presented) {
+        app.ulwFailures = 0;
+    } else if (++app.ulwFailures > 30) {
+        // Surface lost (typically after Win+L / display reconnect): rebuild the DIB next frame.
+        app.ulwFailures = 0;
+        app.destroyBuffer();
+    }
+}
+
+/// Renders at most once per FRAME_INTERVAL; called from both the main loop and WM_TIMER (the latter
+/// keeps the cat alive while a menu / message box runs its own modal loop).
+void renderIfDue(AppState& app) {
+    double now = nowSeconds();
+    if (now < app.nextFrameTime) return;
+    app.nextFrameTime = (now - app.nextFrameTime < FRAME_INTERVAL) ? app.nextFrameTime + FRAME_INTERVAL
+                                                                    : now + FRAME_INTERVAL;
+    tickAndRender(app);
 }
 
 LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     AppState* app = g_app;
     switch (msg) {
-        case KuroWinUpdate::ResultMessage: KuroWinUpdate::complete(hwnd); return 0;
         case WM_INPUT:
             if (app) app->input.handleRawInput(lParam);
             return 0;
 
         case WM_TIMER:
-            if (wParam == 2) { KillTimer(hwnd,2); if(app)KuroWinUpdate::check(app->menuOwnerHwnd,false); }
-            if (wParam == 3 && app) KuroWinUpdate::check(app->menuOwnerHwnd,false);
-            if (wParam == TIMER_RENDER && app) tickAndRender(*app);
+            if (wParam == TIMER_RENDER && app) renderIfDue(*app);
+            return 0;
+
+        case WM_WTSSESSION_CHANGE:
+            if (app && hwnd == app->hwnd) {
+                switch (wParam) {
+                    case WTS_SESSION_LOCK:
+                    case WTS_CONSOLE_DISCONNECT:
+                    case WTS_REMOTE_DISCONNECT:
+                        // Win+L: the key-ups for Win and L go to the secure desktop, never to us.
+                        app->input.resetAllState();
+                        break;
+                    case WTS_SESSION_UNLOCK:
+                    case WTS_SESSION_LOGON:
+                    case WTS_CONSOLE_CONNECT:
+                    case WTS_REMOTE_CONNECT:
+                        recoverAfterSystemEvent(*app);
+                        break;
+                    default:
+                        break;
+                }
+            }
+            return 0;
+
+        case WM_POWERBROADCAST:
+            if (app && hwnd == app->hwnd &&
+                (wParam == PBT_APMRESUMEAUTOMATIC || wParam == PBT_APMRESUMESUSPEND)) {
+                recoverAfterSystemEvent(*app);
+            }
+            return TRUE;
+
+        case WM_DISPLAYCHANGE:
+            // Fullscreen games often switch resolution; the cat could end up off-screen or with a
+            // stale surface. Re-place it (without touching the saved position) and rebuild the buffer.
+            if (app && hwnd == app->hwnd) recoverAfterSystemEvent(*app);
+            return 0;
+
+        case WM_REQUEST_QUIT:
+            if (app) quitApp(*app);
             return 0;
 
         case WM_SETCURSOR:
@@ -617,10 +953,18 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_DESTROY:
             if (hwnd == (app ? app->hwnd : nullptr)) {
                 KillTimer(hwnd, TIMER_RENDER);
-                KillTimer(hwnd,2);KillTimer(hwnd,3);
                 if (app) {
+                    if (app->sessionNotifyRegistered) {
+                        WTSUnRegisterSessionNotification(hwnd);
+                        app->sessionNotifyRegistered = false;
+                    }
+                    if (app->foregroundHook) {
+                        UnhookWinEvent(app->foregroundHook);
+                        app->foregroundHook = nullptr;
+                    }
                     if (app->menuOwnerHwnd) {
                         UnregisterHotKey(app->menuOwnerHwnd, HOTKEY_CLICKTHROUGH_ID);
+                        RemovePropW(app->menuOwnerHwnd, VERSION_PROP);
                         DestroyWindow(app->menuOwnerHwnd);
                         app->menuOwnerHwnd = nullptr;
                     }
@@ -639,21 +983,87 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
+void CALLBACK onForegroundChanged(HWINEVENTHOOK, DWORD, HWND, LONG, LONG, DWORD, DWORD) {
+    // A game just came to the front: many make themselves topmost right after showing, so
+    // re-assert our own topmost state shortly afterwards instead of staying buried ("vanished").
+    if (g_app) g_app->pendingTopmostTime = nowSeconds() + 0.4;
+}
+
+/// Asks the already-running KuroCat to exit and waits for it. Builds <= 1.3.2 do not know
+/// WM_REQUEST_QUIT, but they shut down cleanly when their overlay window receives WM_CLOSE.
+bool shutDownRunningInstance(HWND owner, DWORD timeoutMs) {
+    DWORD pid = 0;
+    if (owner) GetWindowThreadProcessId(owner, &pid);
+    HANDLE hProc = pid ? OpenProcess(SYNCHRONIZE, FALSE, pid) : nullptr;
+    if (owner) PostMessageW(owner, WM_REQUEST_QUIT, 0, 0);
+    if (HWND overlay = FindWindowW(OVERLAY_CLASS, nullptr)) PostMessageW(overlay, WM_CLOSE, 0, 0);
+    bool gone = false;
+    if (hProc) {
+        gone = (WaitForSingleObject(hProc, timeoutMs) == WAIT_OBJECT_0);
+        CloseHandle(hProc);
+    } else {
+        for (DWORD waited = 0; waited <= timeoutMs; waited += 100) {
+            if (!FindWindowW(TRAY_OWNER_CLASS, nullptr) && !FindWindowW(OVERLAY_CLASS, nullptr)) { gone = true; break; }
+            Sleep(100);
+        }
+    }
+    return gone;
+}
+
 } // namespace
 
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
-    // Enable crisp Per-Monitor V2 DPI awareness on Windows 10/11
-    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    // Enable best available DPI awareness (Per-Monitor V2 on Win10/11, Per-Monitor on Win8.1, System DPI on Win7)
+    enableBestDpiAwareness();
 
-    // Single-instance guard: re-launching KuroCat.exe wakes the existing cat,
-    // cancels full click-through, and pops up the menu so users NEVER get stuck!
-    HANDLE hMutex = CreateMutexW(nullptr, TRUE, L"Local\\KuroCatDesktopPetSingleInstance");
-    if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        if (HWND existing = FindWindowW(L"KuroCatTrayOwnerClass", nullptr)) {
-            PostMessageW(existing, WM_WAKE_EXISTING, 0, 0);
+    const int myVersion = versionToNumber(APP_VERSION);
+    const bool forceTakeover = commandLineHasFlag(L"--takeover");   // admin relaunch
+    const bool noElevate = commandLineHasFlag(L"--no-elevate");
+    const wchar_t* kMutexName = L"Local\\KuroCatDesktopPetSingleInstance";
+
+    // Single-instance guard. Re-launching the SAME version wakes the existing cat (cancels full
+    // click-through and pops the menu so users never get stuck). Launching a NEWER version (e.g. a
+    // freshly downloaded exe while the old one still sits in the tray or autostarts from another
+    // folder) now replaces the old process instead of silently waking it — previously the old
+    // version kept running and kept reporting "new version available".
+    HANDLE hMutex = CreateMutexW(nullptr, FALSE, kMutexName);
+    DWORD mutexErr = GetLastError();
+    bool alreadyRunning = (hMutex && mutexErr == ERROR_ALREADY_EXISTS) || (!hMutex && mutexErr == ERROR_ACCESS_DENIED);
+    if (alreadyRunning) {
+        HWND owner = FindWindowW(TRAY_OWNER_CLASS, nullptr);
+        if (!owner && forceTakeover) {
+            // The instance we replace is already shutting down; give it a moment to disappear.
+            for (int i = 0; i < 50 && FindWindowW(OVERLAY_CLASS, nullptr); ++i) Sleep(100);
+        } else if (!owner) {
+            if (hMutex) CloseHandle(hMutex);
+            return 0;
         }
-        if (hMutex) CloseHandle(hMutex);
-        return 0;
+        if (owner) {
+            int runningVersion = (int)(INT_PTR)GetPropW(owner, VERSION_PROP);
+            bool replace = forceTakeover || runningVersion < myVersion;
+            if (!replace || !shutDownRunningInstance(owner, 6000)) {
+                PostMessageW(owner, WM_WAKE_EXISTING, 0, 0);
+                if (hMutex) CloseHandle(hMutex);
+                return 0;
+            }
+        }
+        if (!hMutex) hMutex = CreateMutexW(nullptr, FALSE, kMutexName);
+    }
+
+    AppState app;
+    g_app = &app;
+    app.settings.loadFromRegistry();
+    app.isElevated = isCurrentProcessElevated();
+
+    // "Always run as administrator": hand over to an elevated copy (one UAC prompt). If the user
+    // declines, simply carry on non-elevated.
+    if (app.settings.runAsAdmin && !app.isElevated && !noElevate) {
+        if (hMutex) { CloseHandle(hMutex); hMutex = nullptr; }
+        if (relaunchSelfElevated(L"--takeover --no-elevate")) {
+            g_app = nullptr;
+            return 0;
+        }
+        hMutex = CreateMutexW(nullptr, FALSE, kMutexName);
     }
 
     g_msgTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
@@ -662,23 +1072,19 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     ULONG_PTR gdipToken = 0;
     Gdiplus::GdiplusStartup(&gdipToken, &gdipInput, nullptr);
 
-    AppState app;
-    g_app = &app;
-    app.settings.loadFromRegistry();
-
     // Refresh auto-start exe path if user enabled auto-start and moved KuroCat.exe
     if (isAutoStartEnabled()) {
         setAutoStartEnabled(true);
     }
 
     app.input.onKeyDown = [&](PhysicalKey k) { app.physics.triggerKeyDown(k, app.settings); };
-    app.input.onMouseClick = [&](int btn, bool down) { app.physics.triggerMouseClick(btn, down); };
+    app.input.onMouseClick = [&](int btn, bool down) { app.physics.triggerMouseClick(btn, down, app.settings); };
 
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = wndProc;
     wc.hInstance = hInst;
-    wc.lpszClassName = L"KuroCatOverlayWindowClass";
+    wc.lpszClassName = OVERLAY_CLASS;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     RegisterClassExW(&wc);
 
@@ -687,7 +1093,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     trayWc.cbSize = sizeof(trayWc);
     trayWc.lpfnWndProc = wndProc;
     trayWc.hInstance = hInst;
-    trayWc.lpszClassName = L"KuroCatTrayOwnerClass";
+    trayWc.lpszClassName = TRAY_OWNER_CLASS;
     RegisterClassExW(&trayWc);
 
     app.menuOwnerHwnd = CreateWindowExW(
@@ -698,6 +1104,14 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
         0, 0, 0, 0,
         nullptr, nullptr, hInst, nullptr
     );
+    if (app.menuOwnerHwnd) {
+        SetPropW(app.menuOwnerHwnd, VERSION_PROP, (HANDLE)(INT_PTR)myVersion);
+        // When elevated, UIPI would drop messages from the (non-elevated) taskbar and from a
+        // re-launched KuroCat. Explicitly allow the few messages we rely on.
+        const UINT allowed[] = { WM_TRAYICON, WM_WAKE_EXISTING, WM_REQUEST_QUIT };
+        for (UINT m : allowed) ChangeWindowMessageFilterEx(app.menuOwnerHwnd, m, MSGFLT_ALLOW, nullptr);
+        if (g_msgTaskbarCreated) ChangeWindowMessageFilterEx(app.menuOwnerHwnd, g_msgTaskbarCreated, MSGFLT_ALLOW, nullptr);
+    }
 
     int initW = (int)std::round(CatPhysics::CanvasWidth * app.settings.scale);
     int initH = (int)std::round(CatPhysics::CanvasHeight * app.settings.scale);
@@ -730,6 +1144,12 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     app.input.registerRawInput(app.hwnd);
     registerTrayIcon(app);
 
+    // Win+L / fast-user-switch notifications (see recoverAfterSystemEvent)
+    app.sessionNotifyRegistered = WTSRegisterSessionNotification(app.hwnd, NOTIFY_FOR_THIS_SESSION) != FALSE;
+    // Foreground changes (games launching) -> re-assert topmost
+    app.foregroundHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr,
+                                         onForegroundChanged, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+
     // Global shortcut Ctrl+Alt+Shift+P to toggle full click-through anytime!
     if (app.menuOwnerHwnd) {
         RegisterHotKey(app.menuOwnerHwnd, HOTKEY_CLICKTHROUGH_ID, MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, 'P');
@@ -738,17 +1158,40 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     ShowWindow(app.hwnd, SW_SHOWNOACTIVATE);
     app.lastTickTime = nowSeconds();
     tickAndRender(app);
+    app.nextFrameTime = nowSeconds() + FRAME_INTERVAL;
     SetTimer(app.hwnd, TIMER_RENDER, 16, nullptr);
-    SetTimer(app.hwnd,2,5000,nullptr);
-    SetTimer(app.hwnd,3,6*60*60*1000,nullptr);
 
+    // Frame loop. WM_TIMER is only generated when the queue is empty, so a 1000-8000 Hz gaming mouse
+    // (one WM_INPUT per report) could starve it and freeze the cat. Here frames are driven by time:
+    // drain messages for at most ~10 ms, then render if a frame is due. WM_TIMER still calls
+    // renderIfDue() so the cat keeps animating inside menus / message boxes (their own modal loops).
     MSG msg = {};
-    while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
+    int exitCode = 0;
+    bool running = true;
+    while (running) {
+        double now = nowSeconds();
+        double waitSec = app.isVisible ? (app.nextFrameTime - now) : 0.25;
+        if (waitSec > 0.0) {
+            MsgWaitForMultipleObjectsEx(0, nullptr, (DWORD)(waitSec * 1000.0), QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        }
+        double drainUntil = nowSeconds() + 0.010;
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            if (msg.message == WM_QUIT) {
+                running = false;
+                exitCode = (int)msg.wParam;
+                break;
+            }
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+            if (nowSeconds() > drainUntil) break;
+        }
+        if (!running) break;
+        renderIfDue(app);
+        housekeeping(app);
     }
 
+    g_app = nullptr;
     Gdiplus::GdiplusShutdown(gdipToken);
     if (hMutex) CloseHandle(hMutex);
-    return 0;
+    return exitCode;
 }

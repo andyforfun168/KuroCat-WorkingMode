@@ -9,6 +9,15 @@ enum InputEngineStatus: String {
     case hidOnly = "硬件 HID 监听中 (游戏/打字全支持)"
     case eventTapOnly = "全局事件监听中 (EventTap)"
     case needsPermission = "需开启「输入监控」以全局监听键盘"
+    case needsRestart = "已授权，键盘监听启动失败"
+
+    var needsAttention: Bool {
+        self == .needsPermission || self == .needsRestart
+    }
+
+    var permissionPillText: String {
+        self == .needsRestart ? "监听启动失败，点击重启重试 ↻" : "点击开启全局/游戏键盘监听 🔑"
+    }
 }
 
 /// Dual-layer full-state keyboard & mouse capture engine for macOS.
@@ -62,7 +71,7 @@ final class InputEngine {
         if isHIDActive && isTapActive { return .fullHardware }
         if isHIDActive { return .hidOnly }
         if isTapActive { return .eventTapOnly }
-        return .needsPermission
+        return .needsRestart
     }
 
     var hasInputMonitoringPermission: Bool {
@@ -96,19 +105,37 @@ final class InputEngine {
 
         // Periodically check if the user just granted Input Monitoring permission
         permissionCheckTimer?.invalidate()
-        permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 1.5, repeats: true) { [weak self] _ in
             guard let self else { return }
             let prevStatus = self.status
-            if !self.isHIDActive && self.hasInputMonitoringPermission {
+            let inputAllowed = self.hasInputMonitoringPermission
+            let keyboardAllowed = inputAllowed || self.hasAccessibilityPermission
+            if !inputAllowed && self.isHIDActive {
+                self.stopHID()
+            }
+            if !keyboardAllowed && self.isTapActive {
+                self.stopEventTap()
+            }
+            if let tap = self.eventTap, !CFMachPortIsValid(tap) {
+                self.stopEventTap()
+            }
+            if !self.isHIDActive && inputAllowed {
                 self.tryStartHID()
             }
-            if !self.isTapActive && (self.hasInputMonitoringPermission || self.hasAccessibilityPermission) {
+            if !self.isTapActive && keyboardAllowed {
                 self.tryStartEventTap()
+            } else if self.isTapActive, let tap = self.eventTap, !CGEvent.tapIsEnabled(tap: tap) {
+                CGEvent.tapEnable(tap: tap, enable: true)
+                if !CGEvent.tapIsEnabled(tap: tap) {
+                    self.stopEventTap()
+                }
             }
             if self.status != prevStatus {
                 self.notifyStatus()
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        permissionCheckTimer = timer
     }
 
     func stop() {
@@ -192,20 +219,20 @@ final class InputEngine {
             engine.handleHIDValue(value)
         }, context)
 
-        IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+        IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
         let openResult = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
         if openResult == kIOReturnSuccess {
             self.hidManager = manager
             self.isHIDActive = true
         } else {
-            IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+            IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
             self.isHIDActive = false
         }
     }
 
     private func stopHID() {
         if let manager = hidManager {
-            IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+            IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
             IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
             hidManager = nil
         }
@@ -302,6 +329,9 @@ final class InputEngine {
         }
         if let source = eventTapRunLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+        }
+        if let tap = eventTap {
+            CFMachPortInvalidate(tap)
         }
         eventTap = nil
         eventTapRunLoopSource = nil

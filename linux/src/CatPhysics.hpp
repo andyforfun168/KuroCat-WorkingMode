@@ -35,10 +35,15 @@ enum class EyeColorTheme : int {
 
 struct CatSettings {
     bool showKeyBadges = true;
+    bool showMouseBadges = true;
+    bool showKeyLegends = true;
     bool footEasterEgg = true;
     bool petInteraction = true;
     bool fullClickThrough = false;
     bool alwaysOnTop = true;
+    // 60fps redraws of a translucent window overload software compositors (统信 UOS / 麒麟 on
+    // integrated or 国产 GPUs, VMs) and made the whole desktop lag. Default is adaptive 30/20/10fps.
+    bool highFrameRate = false;
     float scale = 1.0f;
     CatCoatTheme coatTheme = CatCoatTheme::ClassicBlack;
     KeyboardTheme keyboardTheme = KeyboardTheme::ClassicMilk;
@@ -68,10 +73,13 @@ struct CatSettings {
             std::string v = line.substr(eq + 1);
             try {
                 if (k == "showKeyBadges") showKeyBadges = (std::stoi(v) != 0);
+                else if (k == "showMouseBadges") showMouseBadges = (std::stoi(v) != 0);
+                else if (k == "showKeyLegends") showKeyLegends = (std::stoi(v) != 0);
                 else if (k == "footEasterEgg") footEasterEgg = (std::stoi(v) != 0);
                 else if (k == "petInteraction") petInteraction = (std::stoi(v) != 0);
                 else if (k == "fullClickThrough") fullClickThrough = (std::stoi(v) != 0);
                 else if (k == "alwaysOnTop") alwaysOnTop = (std::stoi(v) != 0);
+                else if (k == "highFrameRate") highFrameRate = (std::stoi(v) != 0);
                 else if (k == "scale") scale = std::clamp(std::stof(v), 0.5f, 2.0f);
                 else if (k == "coatTheme") coatTheme = (CatCoatTheme)std::clamp(std::stoi(v), 0, 3);
                 else if (k == "keyboardTheme") keyboardTheme = (KeyboardTheme)std::clamp(std::stoi(v), 0, 2);
@@ -90,10 +98,13 @@ struct CatSettings {
         std::ofstream f(dir + "/config.ini");
         if (!f.is_open()) return;
         f << "showKeyBadges=" << (showKeyBadges ? 1 : 0) << "\n"
+          << "showMouseBadges=" << (showMouseBadges ? 1 : 0) << "\n"
+          << "showKeyLegends=" << (showKeyLegends ? 1 : 0) << "\n"
           << "footEasterEgg=" << (footEasterEgg ? 1 : 0) << "\n"
           << "petInteraction=" << (petInteraction ? 1 : 0) << "\n"
           << "fullClickThrough=" << (fullClickThrough ? 1 : 0) << "\n"
           << "alwaysOnTop=" << (alwaysOnTop ? 1 : 0) << "\n"
+          << "highFrameRate=" << (highFrameRate ? 1 : 0) << "\n"
           << "scale=" << scale << "\n"
           << "coatTheme=" << (int)coatTheme << "\n"
           << "keyboardTheme=" << (int)keyboardTheme << "\n"
@@ -230,9 +241,10 @@ public:
         }
     }
 
-    void triggerMouseClick(int button, bool isDown) {
+    void triggerMouseClick(int button, bool isDown, const CatSettings& settings) {
         sleepiness = 0.0f;
         if (isDown) {
+            double now = nowSeconds();
             if (button == 0) {
                 mousePressLeft.target = 1.0f;
                 leftPaw.y.velocity += 130.0f;
@@ -242,6 +254,11 @@ public:
             }
             pupilScale.target = 1.12f;
             earTwitch.velocity -= 2.2f;
+            if (settings.showMouseBadges) {
+                std::string lbl = (button == 0) ? "左键" : (button == 1 ? "右键" : "中键");
+                Pt pt = { MouseBaseCenter.x + mouseOffset.point().x, MouseBaseCenter.y + mouseOffset.point().y - 6.0f };
+                spawnFloatingKeycap(lbl, pt, now);
+            }
         } else {
             if (button == 0) mousePressLeft.target = 0.0f;
             else mousePressRight.target = 0.0f;
@@ -318,12 +335,12 @@ public:
 
         // Fast Mouse Movement -> Hunting Mode (big round boba pupils + low crouch!)
         float mouseSpeed = std::hypot(engine.mouseVelocity.x, engine.mouseVelocity.y);
-        if (mouseSpeed > 460.0f && petHeadIntensity < 0.25f && petBodyIntensity < 0.25f) {
-            float boost = std::min(1.0f, (mouseSpeed - 460.0f) / 1100.0f);
-            huntIntensity.target = std::min(1.0f, huntIntensity.target + (0.45f + boost * 1.15f) * dt);
+        if (mouseSpeed > 1500.0f && petHeadIntensity < 0.25f && petBodyIntensity < 0.25f) {
+            float boost = std::min(1.0f, (mouseSpeed - 1500.0f) / 1800.0f);
+            huntIntensity.target = std::min(1.0f, huntIntensity.target + (0.40f + boost * 1.25f) * dt);
             sleepiness = 0.0f;
         } else {
-            huntIntensity.target = std::max(0.0f, huntIntensity.target - dt * 0.65f);
+            huntIntensity.target = std::max(0.0f, huntIntensity.target - dt * 1.15f);
         }
         huntIntensity.step(dt, 85.0f, 16.0f);
         float hunt = std::clamp(huntIntensity.value, 0.0f, 1.0f);

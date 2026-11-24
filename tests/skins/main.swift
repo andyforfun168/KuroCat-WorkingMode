@@ -5,6 +5,7 @@ final class RenderSettings {
  var coatTheme = CatCoatTheme.classicBlack
  var eyeTheme = EyeColorTheme.neonChartreuse
  var keyboardTheme = KeyboardTheme.classicMilk
+ var showKeyLegends = false
  let showKeyBadges = false
 }
 let output = URL(fileURLWithPath: CommandLine.arguments[1])
@@ -14,6 +15,8 @@ func frame(_ coat: CatCoatTheme,_ eye:EyeColorTheme,_ state:Int,_ legacy:Bool = 
  switch state {
  case 1: p.headYaw.value = -1; p.headPitch.value = -0.65; p.headTilt.value = -0.13
  case 2: p.headYaw.value = 1; p.headPitch.value = 0.65; p.headTilt.value = 0.13
+ case 11:
+  p.headYaw.value=CGFloat(pose % 3 - 1);p.headPitch.value=CGFloat(pose / 3 - 1)
  case 10:
   p.headYaw.value=1;p.headPitch.value=1;p.headTilt.value=0.07
   p.eyeGaze.x.value=0.88;p.eyeGaze.y.value=0.85
@@ -45,7 +48,7 @@ func frame(_ coat: CatCoatTheme,_ eye:EyeColorTheme,_ state:Int,_ legacy:Bool = 
  let s=RenderSettings.shared;s.coatTheme=coat;s.eyeTheme=eye
  let ctx=CGContext(data:nil,width:720,height:640,bitsPerComponent:8,bytesPerRow:720*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue)!
  ctx.translateBy(x:0,y:640);ctx.scaleBy(x:2,y:-2)
- if pointyChin {PointyChinRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else if occludedMuzzle {OccludedMuzzleRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else if legacy {LegacyRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else {CurrentRenderer.draw(in:ctx,physics:p,showPermissionPill:false)}
+ if pointyChin {PointyChinRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else if occludedMuzzle {OccludedMuzzleRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else if legacy && (state == 8 || state == 9) {ShoulderFixtureRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else if legacy {LegacyRenderer.draw(in:ctx,physics:p,showPermissionPill:false)} else {CurrentRenderer.draw(in:ctx,physics:p,showPermissionPill:false)}
  return ctx
 }
 func pixels(_ c:CGContext)->[UInt8] {Array(UnsafeBufferPointer(start:c.data!.assumingMemoryBound(to:UInt8.self),count:720*640*4))}
@@ -65,7 +68,7 @@ for (name,coat) in [("shorthair",CatCoatTheme.shorthair),("orangeWhite",.orangeW
 }
 for (name,coat) in [("black",CatCoatTheme.classicBlack),("siamese",.siamese)] {save(frame(coat,coat == .siamese ? .siameseBlue : .neonChartreuse,0),name+".png")}
 save(frame(.shorthair,.softAmber,0),"shorthair-amber.png")
-print("PASS: \(n) legacy skin/eye/action frames pixel-identical to v1.3.0; rendered 16 new skin/action frames including turned heads, typing/mouse/third paw, sleep, petting and hunting.")
+print("PASS: \(n) legacy skin/eye/action frames pixel-identical to upstream v1.3.5; rendered 16 new skin/action frames including turned heads, typing/mouse/third paw, sleep, petting and hunting.")
 
 for (name,coat) in [("shorthair",CatCoatTheme.shorthair),("orangeWhite",.orangeWhite)] {
  save(frame(coat,.softAmber,8),name+"-shoulder-after.png")
@@ -207,3 +210,41 @@ for y in 313...315 {for x in 430...432 {
  for ch in 0..<4 {precondition(abs(Int(frontBody[i+ch])-Int(ginger[ch]))<=2,"Extra chin coverage hides front-facing body spot")}
 }}
 print("PASS: front-facing body spot remains visible while extreme right-down cheek stays opaque")
+
+RenderSettings.shared.showKeyLegends = false
+let withoutLegends = pixels(frame(.orangeWhite,.referenceHazel,0))
+RenderSettings.shared.showKeyLegends = true
+let withLegends = pixels(frame(.orangeWhite,.referenceHazel,0))
+precondition(withoutLegends != withLegends,"Keyboard legend toggle has no effect")
+for y in 160..<342 { for x in 240..<490 { let i=(y*720+x)*4
+ precondition(Array(withoutLegends[i..<i+4]) == Array(withLegends[i..<i+4]),"Keyboard legends change face artwork")
+}}
+RenderSettings.shared.showKeyLegends = false
+print("PASS: keyboard legend toggle changes keys without changing face pixels")
+
+// The nose and both mouth lobes stay visible at all nine full yaw/pitch poses.
+func hasInk(_ data:[UInt8],_ at:CGPoint,_ nose:Bool)->Bool {
+ let px=Int(at.x*2),py=Int(at.y*2)
+ for y in (py-2)...(py+2) {for x in (px-2)...(px+2) {
+  let i=(y*720+x)*4; let rgb=Array(data[i..<i+3]).map{Int($0)}
+  if nose && rgb[0]>200 && rgb[0]-rgb[1]>35 && rgb[2]-rgb[1]>5 && rgb[2]<200 {return true}
+  if !nose && rgb.min()! > 85 && rgb.max()! < 205 && rgb.max()!-rgb.min()! < 20 {return true}
+ }}
+ return false
+}
+for (name,coat) in [("shorthair",CatCoatTheme.shorthair),("orangeWhite",.orangeWhite)] {
+ for pose in 0..<9 {
+  let yaw=CGFloat(pose % 3 - 1),pitch=CGFloat(pose / 3 - 1)
+  let c=frame(coat,.referenceHazel,11,false,pose),data=pixels(c)
+  let center=CGPoint(x:184+yaw*7.5,y:126+pitch*4.8)
+  func location(_ x:CGFloat,_ y:CGFloat)->CGPoint {
+   let p=CurrentRenderer.projectHead3D(x:x,y:y,z:30,yawRad:yaw*0.5,pitchRad:pitch*0.36).pt
+   return CGPoint(x:center.x+p.x,y:center.y+p.y)
+  }
+  precondition(hasInk(data,location(0,9.8),true),"Nose lost at pose \(pose), \(coat)")
+  precondition(hasInk(data,location(-3.025,17.0875),false),"Left mouth lost at pose \(pose), \(coat)")
+  precondition(hasInk(data,location(3.025,17.0875),false),"Right mouth lost at pose \(pose), \(coat)")
+  save(c,"\(name)-muzzle-view-\(pose).png")
+ }
+}
+print("PASS: noses and both mouth lobes visible in all 18 extreme yaw/pitch renders")

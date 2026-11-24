@@ -7,9 +7,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var renderTimer: Timer?
     private var lastFrameTime: CFTimeInterval = CACurrentMediaTime()
     private var isPetVisible = true
+    private var isHandingOverToNewerCopy = false
+
+    private var currentAppVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.3.6"
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        if resolveDuplicateRunningCopies() { return }
 
         overlayWindow = OverlayWindow()
         overlayWindow.orderFrontRegardless()
@@ -44,13 +50,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             _ = setAutoStartEnabled(true)
         }
         startRenderLoop()
-        UpdateChecker.shared.start()
+
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Quitting during launch because a newer copy is running: leave its stats alone.
+        if isHandingOverToNewerCopy { return }
         renderTimer?.invalidate()
         InputEngine.shared.flushStats()
         InputEngine.shared.stop()
+    }
+
+    // MARK: - One KuroCat at a time (newest copy wins)
+
+    /// Users often download a new KuroCat.app while an older copy is still running (or is started
+    /// by the login item from another folder). That old process kept running and kept announcing
+    /// "new version available" even though they had already updated. Keep only the newest copy:
+    /// quit older ones, or hand over to an already-running newer one. Returns true if THIS process quits.
+    private func resolveDuplicateRunningCopies() -> Bool {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return false }
+        let myPID = ProcessInfo.processInfo.processIdentifier
+        let myURL = Bundle.main.bundleURL.standardizedFileURL
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .filter { $0.processIdentifier != myPID }
+        if others.isEmpty { return false }
+
+        for other in others {
+            guard let otherURL = other.bundleURL?.standardizedFileURL, otherURL != myURL,
+                  let otherVersion = Self.shortVersion(ofAppAt: otherURL) else { continue }
+            if otherVersion.compare(currentAppVersion, options: .numeric) == .orderedDescending {
+                isHandingOverToNewerCopy = true
+                _ = other.activate(options: [])
+                NSApp.terminate(nil)
+                return true
+            }
+        }
+        for other in others {
+            // Same path (replaced in place by an update) or an older/equal copy elsewhere.
+            if !other.terminate() { _ = other.forceTerminate() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                if !other.isTerminated { _ = other.forceTerminate() }
+            }
+        }
+        return false
+    }
+
+    /// Reads CFBundleShortVersionString straight from disk (Bundle(url:) may return cached info).
+    private static func shortVersion(ofAppAt url: URL) -> String? {
+        let plistURL = url.appendingPathComponent("Contents/Info.plist")
+        guard let dict = NSDictionary(contentsOf: plistURL) as? [String: Any] else { return nil }
+        return dict["CFBundleShortVersionString"] as? String
     }
 
     // MARK: - 60 FPS Render Loop
@@ -100,8 +149,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let physics = overlayWindow.catView.physics
 
         // Status header
-        let statusPrefix = engine.status == .needsPermission ? "⚠️" : "🟢"
-        let statusItem = NSMenuItem(title: "\(statusPrefix) \(engine.status.rawValue)", action: engine.status == .needsPermission ? #selector(openInputMonitoringSettings) : nil, keyEquivalent: "")
+        let statusPrefix = engine.status.needsAttention ? "⚠️" : "🟢"
+        let statusItem = NSMenuItem(title: "\(statusPrefix) \(engine.status.rawValue)", action: engine.status.needsAttention ? #selector(openInputMonitoringSettings) : nil, keyEquivalent: "")
         statusItem.target = self
         menu.addItem(statusItem)
 
@@ -147,12 +196,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         badgesItem.state = settings.showKeyBadges ? .on : .off
         menu.addItem(badgesItem)
 
+        let mouseBadgesItem = NSMenuItem(title: "显示鼠标点击气泡 ([左键] [右键])", action: #selector(toggleMouseBadges), keyEquivalent: "")
+        mouseBadgesItem.target = self
+        mouseBadgesItem.state = settings.showMouseBadges ? .on : .off
+        menu.addItem(mouseBadgesItem)
+
+        let legendsItem = NSMenuItem(title: "显示键盘字符", action: #selector(toggleKeyLegends), keyEquivalent: "")
+        legendsItem.target = self
+        legendsItem.state = settings.showKeyLegends ? .on : .off
+        menu.addItem(legendsItem)
+
         let footItem = NSMenuItem(title: "3键同时按「用脚按」彩蛋 🐾", action: #selector(toggleFootEgg), keyEquivalent: "")
         footItem.target = self
         footItem.state = settings.footEasterEgg ? .on : .off
         menu.addItem(footItem)
 
-        let petItem = NSMenuItem(title: "摸头/摸背闭眼互动", action: #selector(togglePetInteraction), keyEquivalent: "")
+        let petItem = NSMenuItem(title: "摸头闭眼互动", action: #selector(togglePetInteraction), keyEquivalent: "")
         petItem.target = self
         petItem.state = settings.petInteraction ? .on : .off
         menu.addItem(petItem)
@@ -234,15 +293,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        let checkUpdate = NSMenuItem(title: "检查更新…", action: #selector(checkForUpdates), keyEquivalent: "")
-        checkUpdate.target = self
-        menu.addItem(checkUpdate)
-        let autoUpdate = NSMenuItem(title: "自动检查更新（每天一次）", action: #selector(toggleUpdateChecks), keyEquivalent: "")
-        autoUpdate.target = self
-        autoUpdate.state = UpdateChecker.shared.automatic ? .on : .off
-        menu.addItem(autoUpdate)
-        menu.addItem(.separator())
-
         let quitItem = NSMenuItem(title: "退出 KuroCat", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
@@ -250,12 +300,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return menu
     }
 
-    @objc private func checkForUpdates() { UpdateChecker.shared.check(manual: true) }
-    @objc private func toggleUpdateChecks() { UpdateChecker.shared.automatic.toggle() }
-
     // MARK: - Actions
 
     @objc private func openInputMonitoringSettings() {
+        if InputEngine.shared.status == .needsRestart {
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "已授权，键盘监听启动失败"
+            alert.informativeText = "请重启 KuroCat，让系统重新建立键盘监听。\n当前程序位置：\(Bundle.main.bundlePath)"
+            alert.addButton(withTitle: "重启 KuroCat")
+            alert.addButton(withTitle: "打开输入监控")
+            alert.addButton(withTitle: "取消")
+            let response = alert.runModal()
+            if response == .alertFirstButtonReturn {
+                relaunchApp()
+                return
+            }
+            if response != .alertSecondButtonReturn { return }
+        }
         InputEngine.shared.requestPermissionsAndOpenSettings()
     }
 
@@ -327,6 +389,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleKeyBadges() {
         CatSettings.shared.showKeyBadges.toggle()
+    }
+
+    @objc private func toggleMouseBadges() {
+        CatSettings.shared.showMouseBadges.toggle()
+    }
+
+    @objc private func toggleKeyLegends() {
+        CatSettings.shared.showKeyLegends.toggle()
     }
 
     @objc private func toggleFootEgg() {

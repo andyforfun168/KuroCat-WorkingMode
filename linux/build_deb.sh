@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-VERSION="${1:-1.3.5}"
+VERSION="${1:-1.3.6}"
 if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "Expected a numeric release version such as 1.3.5" >&2
+    echo "Expected a numeric release version such as 1.3.6" >&2
     exit 1
 fi
 ARCH="$(dpkg --print-architecture)"
@@ -42,7 +42,7 @@ Section: utils
 Priority: optional
 Architecture: ${ARCH}
 Depends: ${DEPENDS}
-Maintainer: andyforfun168 <https://github.com/andyforfun168/KuroCatAndy>
+Maintainer: andyforfun168 <andyforfun168@users.noreply.github.com>
 Homepage: https://github.com/andyforfun168/KuroCatAndy
 Description: KuroCat native desktop keyboard & mouse cat pet
  Lightweight 60fps transparent desktop pet supporting full-state keyboard and
@@ -50,6 +50,8 @@ Description: KuroCat native desktop keyboard & mouse cat pet
  hunting dilated eyes, petting interactions, and Black/Siamese skins.
  Compatible with Ubuntu, Debian, Deepin, UnionTech UOS, and Kylin OS.
 EOF
+
+chmod -R u=rwX,go=rX "$PKG_DIR"
 
 OUT_DEB="$ROOT/KuroCat-Linux-${ARCH}.deb"
 dpkg-deb --build --root-owner-group "$PKG_DIR" "$OUT_DEB"

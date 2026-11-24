@@ -15,7 +15,7 @@
   Native macOS (Swift + CoreGraphics + IOHIDManager) · Windows (C++17 + GDI+ + Raw Input) · Linux / UOS (C++17 + GTK3/Cairo + XInput2/evdev)
 </p>
 
-> This repository is a fork of [chanke17/KuroCat](https://github.com/chanke17/KuroCat). The current release is [v1.3.5](https://github.com/andyforfun168/KuroCatAndy/releases/tag/v1.3.5), with an orange-eye app icon, update notices, and the approved Shorthair / Orange & White rendering fixes. Download and update from [this fork's Releases](https://github.com/andyforfun168/KuroCatAndy/releases/latest).
+> Fork of [chanke17/KuroCat](https://github.com/chanke17/KuroCat). v1.3.6 integrates the redesigned Siamese, head-only petting, faster hunting trigger, key legends and click bubbles, platform fixes and password-free Linux installation. The orange-eye app icon and approved Shorthair / Orange & White artwork are preserved. All in-app update functionality is removed; download manually from [this fork’s Releases](https://github.com/andyforfun168/KuroCatAndy/releases/latest).
 
 ---
 
@@ -31,11 +31,11 @@
   - Shake your mouse quickly and the cat's pupils dilate from slit pupils into huge round boba eyes with bright highlights—crouching low, wagging its tail faster, and locking onto the cursor without blinking.
 - **🐾 Fun Interactive Details**
   - **3-Key "Hind Paw Press"**: Hold 3 or more keys simultaneously and the cat lifts its hind paw to press the 3rd key!
-  - **Head / Back Petting**: Gently stroke the cat's head with your cursor to trigger cozy closed eyes `— —` and shimmer particles; leave it idle and it falls asleep with floating `z`s.
-  - **Smart Click-Through, Launch at Login & Auto Update Check**: Transparent areas pass clicks through automatically. Toggle **Full Click-Through (Gaming Anti-Misclick)** anytime, enable **Launch at Login** (Windows Registry / macOS LaunchAgent / Linux XDG Autostart), and check this fork for updates at most once per day. Update notices open its GitHub download page.
+  - **Head Petting**: Gently stroke the cat's head with your cursor to trigger cozy closed eyes `— —` and shimmer particles; leave it idle and it falls asleep with floating `z`s.
+  - **Smart Click-Through & Launch at Login**: Transparent areas pass clicks through automatically. Toggle **Full Click-Through (Gaming Anti-Misclick)** anytime, enable **Launch at Login** (Windows Registry / macOS LaunchAgent / Linux XDG Autostart).
 - **🎨 4 Skins & Custom Color Combinations**
   - **Cat Skins**: Classic Black Cat (neon yellow-green eyes) / Siamese Cat (warm oat cream + 2.5D caramel mask + chocolate socks + sapphire blue eyes) / American Shorthair (silver tabby & white) / Orange & White Cat (orange crown + white chest & mittens)
-  - **Keyboard Themes**: Classic Warm Cream / Midnight Geek Black / Retro Cream Gray (toggle key bubbles)
+  - **Keyboard Themes**: Classic Warm Cream / Midnight Geek Black / Retro Cream Gray (toggle key labels, key bubbles, and mouse click bubbles)
   - **Eye Colors & Scaling**: 6 eye colors, 5 size levels, plus daily keystroke counter and live KPM stats.
 
 ### 6-State Preview of All 4 Skins
@@ -48,7 +48,7 @@
 | :---: | :---: |
 | <img src="assets/preview_shorthair.jpg" width="420" alt="American Shorthair preview"/> | <img src="assets/preview_orangeWhite.jpg" width="420" alt="Orange & White Cat preview"/> |
 
-The 6-state previews are natively rendered by the app: Idle, Top-Left Look, Bottom-Right Look, Hunting, Keyboard/Mouse + 3rd Paw, and Petting Closed Eyes. The Shorthair and Orange & White images retain this fork’s approved v1.3.5 artwork and use the optional pale-gold / teal eye color.
+The 6-state previews are natively rendered by the app: Idle, Top-Left Look, Bottom-Right Look, Hunting, Keyboard/Mouse + 3rd Paw, and Petting Closed Eyes. The Shorthair and Orange & White images retain this fork’s approved v1.3.5 artwork and use the optional amber-gold eye color, with projected pink noses and gray mouths.
 
 ---
 
@@ -56,7 +56,7 @@ The 6-state previews are natively rendered by the app: Idle, Top-Left Look, Bott
 
 Download pre-built binaries from **[Releases](../../releases)** (built automatically via GitHub Actions):
 
-### 🍎 macOS (Universal: Apple Silicon & Intel · macOS 13+)
+### 🍎 macOS (Universal: Apple Silicon & Intel · macOS 11+)
 1. Download `KuroCat-macOS-universal.zip`, unzip it, and drag `KuroCat.app` into **Applications** (lives in the top menu bar, no Dock icon).
 2. On first launch, click the bottom prompt pill to open **System Settings → Privacy & Security → Input Monitoring**, enable `KuroCat`, then click **Restart KuroCat** from the menu bar to enable global typing & gaming capture.
 3. Supports one-click **Launch at Login**. When **Full Click-Through** is enabled, use the menu bar icon or **hold `⌥ Option` and right-click / drag the cat**.
@@ -68,19 +68,19 @@ chmod +x build.sh
 open KuroCat.app
 ```
 
-### 🪟 Windows (Windows 10 / 11 x64)
-1. Download the single-file `KuroCat-Windows-x64.exe` (~382 KB, **zero external runtime dependencies**). Double-click to run; lives in the system tray.
+### 🪟 Windows (Windows 7 SP1 / 8 / 10 / 11 x64)
+1. Download the single-file `KuroCat-Windows-x64.exe` (~220 KB, **zero external runtime dependencies**). Double-click to run; lives in the system tray.
 2. Right-click the cat or click the tray icon to switch skins, keyboard themes, scale, **Launch at Login**, or **Full Click-Through**.
 3. **4 ways to exit or open the menu while Full Click-Through is active**:
    - Global shortcut: **`Ctrl + Alt + Shift + P`** to toggle click-through;
    - Temporary unlock: hold **`Alt`** and right-click the cat to uncheck or left-drag to move;
    - System tray: click the black cat icon in the **`^` hidden icons area** on the taskbar;
    - Fallback: **double-click `KuroCat.exe` again** to disable click-through and open the settings menu at your cursor.
-   > **Cat follows the mouse but not the keyboard in a game?** If the game or launcher runs as Administrator, right-click `KuroCat-Windows-x64.exe` and choose **Run as administrator**.
+   > **Cat follows the mouse but not the keyboard in a game?** The game (or its launcher) runs as Administrator, and Windows withholds its keystrokes from normal apps. Right-click the cat → **Restart as administrator**, or tick **Always run as administrator**. KuroCat shows a tray tip when it detects such a game.
    >
-   > **Cat disappears in a game?** Try borderless/windowed fullscreen instead of exclusive fullscreen.
+   > **Cat disappears in games?** KuroCat now re-asserts always-on-top when a fullscreen/borderless game comes to the front and moves back on-screen after resolution changes. True *exclusive fullscreen* cannot be overlaid by any desktop window — switch the game to borderless/windowed fullscreen.
    >
-   > **Still prompted to update?** Quit the old copy from the tray menu before starting the new exe. Downloading a file does not replace the running process.
+   > **Still running an old copy?** Quit it from the tray before launching the new exe. Newer copies can also take over an old process.
 
 **Build from source (MSVC / MinGW):**
 ```bat
@@ -94,24 +94,27 @@ cmake -B build && cmake --build build --config Release
 ```
 
 ### 🐧 Linux & UOS / Kylin (x86_64 & ARM64)
+Supports **Ubuntu 20.04+ / Debian 11+ / Deepin / UOS (x86_64 & ARM64) / Kylin / Arch / Fedora**:
 
-This fork's pre-built packages use Ubuntu 22.04 as their build baseline. Older Ubuntu / Debian / UOS systems may require a local build. X11 is preferred; Wayland behavior depends on the desktop environment. See [installation and troubleshooting](docs/DOWNLOADS.md) (Chinese).
-
-1. **Debian / Ubuntu / UOS / Kylin**: download `KuroCat-Linux-amd64.deb` (Intel / AMD) or `KuroCat-Linux-arm64.deb` (ARM64), then install with your package manager or:
-   ```bash
-   sudo apt install ./KuroCat-Linux-amd64.deb
-   ```
-   Launch **KuroCat** from the application menu or run `kurocat`.
-2. **Other Linux distributions**: extract `KuroCat-Linux-x86_64.tar.gz` or `KuroCat-Linux-arm64.tar.gz` and run `./kurocat`. Read the included `INSTALL.txt` for runtime requirements.
-3. **Wayland input**: adding your user to the `input` group enables access to raw input devices. Run `sudo usermod -aG input $USER` and log in again; this grants access to all input devices and does not remove Wayland window-management limitations.
-4. **Build from source**:
+1. **No-password install (recommended on UOS / Kylin)**: extract `KuroCat-Linux-x86_64.tar.gz` or `KuroCat-Linux-arm64.tar.gz` and run `bash install.sh` in that folder. It installs into `~/.local` for the current user only (no sudo); `bash uninstall.sh` removes it.
+2. **`.deb` package (UOS / Deepin / Ubuntu / Debian / Kylin)**:
+   - Download `KuroCat-Linux-amd64.deb` or `KuroCat-Linux-arm64.deb`, double-click it or run:
+     ```bash
+     sudo apt install ./KuroCat-Linux-amd64.deb
+     ```
+   - Packages are built on Debian 10 (glibc 2.28), so older UOS 20 / Kylin V10 systems can run them. Use the tar package’s `bash install.sh` for password-free per-user installation.
+   - Kylin refuses to install? Set *Security Center → App Protection / Execution Control* to Off or Warn, or use the no-password install.
+3. **Other Linux distros (Arch / Fedora, etc.)**:
+   - Extract the tar.gz and run `bash install.sh`, or simply run `./kurocat`.
+   - Desktop lagging? KuroCat uses an adaptive 30/20/10 fps by default; the **60fps** option in the menu should stay off on low-end machines.
+   - On pure **Wayland** sessions, run `sudo usermod -aG input $USER` once and re-login to enable kernel-level `evdev` capture.
+4. **Build from source (including LoongArch)**:
    ```bash
    sudo apt install g++ pkg-config libgtk-3-dev libcairo2-dev libx11-dev libxi-dev
    cd linux && chmod +x build.sh build_deb.sh
-   ./build.sh
-   ./build_deb.sh
+   ./build.sh        # Compile binary
+   ./build_deb.sh    # Package .deb installer
    ```
-
 
 ---
 
@@ -134,11 +137,7 @@ KuroCat/
 
 ## 🔒 Privacy
 
-Keyboard and mouse input is processed in local memory to drive animations and counters. Keystroke contents are not logged, saved, or uploaded.
-
-Update checks read public release metadata from this fork's GitHub Release API, automatically at most once per day or manually from **Check for Updates…**. Requests include your IP address and an application-version User-Agent, but no keystrokes, mouse trails, or usage statistics. Automatic checks can be disabled. Notices open the download page; they do not download, install, or replace the application.
-
-Users on v1.3.0 or earlier must upgrade manually once to receive in-app update notices.
+Input drives local animations and counters; keystroke contents are not recorded or uploaded. This fork has no in-app update checks, notices, downloads or automatic installation. Download updates manually from [this fork’s GitHub Releases](https://github.com/andyforfun168/KuroCatAndy/releases/latest).
 
 ## 📄 License
 
