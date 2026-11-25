@@ -309,10 +309,19 @@ final class CatPhysics {
     }
     private(set) var dizzyPhase: CGFloat = 0
     private(set) var isScruffDragging = false
+    private(set) var scruffStartedHoldingPen = false
+    private(set) var scruffPenStartNib = CGPoint.zero
+    private(set) var scruffPenStartAngle: CGFloat = 0
     private var scruffDragDx: CGFloat = 0
     private var scruffDragDy: CGFloat = 0
     private var scruffDragAccumX: CGFloat = 0
     private var scruffDragAccumY: CGFloat = 0
+    // Pickup shaking changes only the face, never the existing collapse state.
+    var scruffDizzyIntensity = Spring1D(0)
+    private(set) var scruffShakeDuration: CGFloat = 0
+    private var scruffShakeDirection = CGVector.zero
+    private var scruffShakeLastReversal: CGFloat = -100
+    private var scruffDizzyTimer: CGFloat = 0
     private var fastMouseDuration: CGFloat = 0
     private var dizzyTimer: CGFloat = 0
     var mouseOffset = Spring2D(.zero)
@@ -340,6 +349,17 @@ final class CatPhysics {
     var tabletPenPress = Spring1D(0)
     var tabletPenTilt = Spring1D(0)
     var tabletTrail: [TabletStrokePoint] = []
+
+    // Standard cats share one pen geometry in both the desk and carried poses.
+    static let stylusBarrelGripDistance: CGFloat = 22
+    static let stylusGripOffsetX: CGFloat = -5
+    static let stylusBaseAngle: CGFloat = -2.45
+    var stylusAngle: CGFloat { Self.stylusBaseAngle + tabletPenTilt.value }
+    var stylusPawGrip: CGPoint {
+        let nib = tabletNib.point
+        return CGPoint(x: nib.x + cos(stylusAngle) * Self.stylusBarrelGripDistance - Self.stylusGripOffsetX,
+                       y: nib.y + sin(stylusAngle) * Self.stylusBarrelGripDistance)
+    }
 
     // Paw mode flags (for crisp outline & posture rendering)
     private(set) var leftPawOnMouse = false
@@ -562,7 +582,13 @@ final class CatPhysics {
         isScruffDragging = dragging
         if dragging {
             if !wasDragging {
+                scruffStartedHoldingPen = isTabletActive && leftPawOnMouse
+                scruffPenStartNib = tabletNib.point
+                scruffPenStartAngle = stylusAngle
                 scruffHoldTime = 0
+                scruffShakeDuration = 0
+                scruffShakeDirection = .zero
+                scruffShakeLastReversal = -100
                 scruffDropTimer = 0
                 scruffDragAccumX = 0
                 scruffDragAccumY = 0
@@ -796,6 +822,36 @@ final class CatPhysics {
             sleepiness = max(0, sleepiness - dt * 5.0)
         }
 
+        // Sustained back-and-forth pickup shaking -> spiral eyes only.
+        // Use real accumulated drag deltas before the inertia integrator consumes them.
+        if isScruffDragging {
+            let distance = hypot(scruffDragAccumX, scruffDragAccumY)
+            let speed = distance / max(dt, 0.001)
+            if speed > 650 {
+                let direction = CGVector(dx: scruffDragAccumX / max(distance, 0.001),
+                                         dy: scruffDragAccumY / max(distance, 0.001))
+                let dot = direction.dx * scruffShakeDirection.dx + direction.dy * scruffShakeDirection.dy
+                if dot < -0.25 { scruffShakeLastReversal = time }
+                scruffShakeDirection = direction
+            }
+            if speed > 650 && time - scruffShakeLastReversal < 0.65 {
+                scruffShakeDuration = min(1.2, scruffShakeDuration + dt)
+            } else {
+                scruffShakeDuration = max(0, scruffShakeDuration - dt * 0.45)
+            }
+            if scruffShakeDuration >= 1.2 {
+                scruffDizzyTimer = 2.5
+                scruffShakeDuration = 0.96
+            }
+        } else {
+            scruffShakeDuration = 0
+        }
+        // Releasing/regrabbing changes the pose, not an already-triggered recovery clock.
+        scruffDizzyTimer = max(0, scruffDizzyTimer - dt)
+        scruffDizzyIntensity.target = scruffDizzyTimer > 0 ? 1 : 0
+        scruffDizzyIntensity.step(dt: dt, stiffness: 75, damping: 14)
+        if scruffDizzyIntensity.value > 0.01 && dizzyTimer <= 0 { dizzyPhase += dt * 7.5 }
+
         // 2b. Fast Mouse Movement -> Hunting / Stalking Mode (dilated round boba pupils + low crouch!)
         // Sustained > 10s of rapid mouse shaking -> Dizzy spiral eyes & slump beside keyboard!
         let mouseSpeed = hypot(curMouseVel.dx, curMouseVel.dy)
@@ -861,6 +917,7 @@ final class CatPhysics {
         scruffSwingY.target = isScruffDragging ? 0.78 * tanh(-scruffDragDy / 18.0) : 0.0
         scruffTailSwing.target = isScruffDragging ? 1.22 * tanh(scruffDragDx / 16.0) : 0.0
         scruffDrag.step(dt: dt, stiffness: 190, damping: 17)
+        if !isScruffDragging && scruffDrag.value < 0.005 { scruffStartedHoldingPen = false }
         scruffSwing.step(dt: dt, stiffness: 92, damping: 7.4)
         scruffSwingY.step(dt: dt, stiffness: 108, damping: 8.4)
         scruffTailSwing.step(dt: dt, stiffness: 58, damping: 5.2)
@@ -1052,7 +1109,7 @@ final class CatPhysics {
         } else if (mouseRecent || (isTabletActive && engine.isPenInProximity)) && sleepiness < 0.3 {
             if isTabletActive {
                 let nib = tabletNib.point
-                leftPaw.target = CGPoint(x: nib.x + 6, y: nib.y - 7)
+                leftPaw.target = isDouniSkin ? CGPoint(x: nib.x + 6, y: nib.y - 7) : stylusPawGrip
                 if curLeftMouse || engine.penPressure > 0.02 {
                     let last = tabletTrail.last?.point
                     if last == nil || hypot(nib.x - last!.x, nib.y - last!.y) >= 1.8 {
@@ -1157,9 +1214,13 @@ final class CatPhysics {
         // Keep body sleek & natural during lie/dizzy (zero fat distortion; renderer handles smooth rigid fall & forward sprawl!)
         bodySquash.target = 1.0 - hunt * 0.11 + scruff * 0.16
 
-        headOffsetY.target = ((leftPawTyping || rightPawTyping) ? 3.5 : (sleepiness * 5.0 + hunt * 10.5))
+        // Match the approved neutral sleeping preview during the real idle-to-sleep transition.
+        // Sleeping roll/pitch and head drop otherwise kink the shared cheek-to-hip outline.
+        let classicSleepBlend: CGFloat = ["builtin:0", "builtin:1", "builtin:2", "builtin:3"].contains(CatSettings.shared.activeSkin.id)
+            ? lie * lie * (3 - 2 * lie) : 0
+        headOffsetY.target = ((leftPawTyping || rightPawTyping) ? 3.5 : (sleepiness * 5.0 * (1 - classicSleepBlend) + hunt * 10.5))
             - scruff * 10.0
-        earFold.target = max(petHeadIntensity * 0.7, petBodyIntensity * 0.45) + sleepiness * 0.25 - hunt * 0.18
+        earFold.target = max(petHeadIntensity * 0.7, petBodyIntensity * 0.45) + sleepiness * 0.25 * (1 - classicSleepBlend) - hunt * 0.18
             + scruff * 0.35 + anger * 0.45 + dizzy * 0.35
         earTwitch.target = 0
 
@@ -1208,7 +1269,7 @@ final class CatPhysics {
         // Head turns smoothly in 2.5D (yaw & pitch) — locks on faster during hunting mode!
         if sleepiness > 0.45 {
             headYaw.target = 0
-            headPitch.target = 0.45 * sleepiness
+            headPitch.target = 0.45 * sleepiness * (1 - classicSleepBlend)
         } else {
             headYaw.target = max(-1.0, min(1.0, lookTargetX))
             headPitch.target = max(-1.0, min(1.0, lookTargetY))
@@ -1220,7 +1281,7 @@ final class CatPhysics {
 
         // Subtle natural head roll coupled to head turning (curious tilt / locked-on hunt!)
         if now - lastPetTime > 0.28 {
-            headTilt.target = bodyTilt.target * 0.45 + headYaw.value * (0.11 + hunt * 0.05) - headYaw.value * headPitch.value * 0.04 + lie * 0.12
+            headTilt.target = (bodyTilt.target * 0.45 + headYaw.value * (0.11 + hunt * 0.05) - headYaw.value * headPitch.value * 0.04 + lie * 0.12) * (1 - classicSleepBlend)
         }
         headTilt.step(dt: dt, stiffness: 130, damping: 16)
 

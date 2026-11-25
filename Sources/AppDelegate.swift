@@ -191,6 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let wasBlinking = physics.isBlinking
             let wasYawning = physics.isYawning
             physics.step(dt: dt, windowFrameInScreen: windowFrame)
+            view.alignScruffBackToCursor()
             view.updateHoverAndClickThrough()
 
             // Track the mouse at 60 Hz. Ordinary movement away from the pet can share the idle redraw cadence.
@@ -206,6 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 || physics.petHeadIntensity > 0.02 || physics.huntIntensity.value > 0.02
                 || physics.scruffDrag.value > 0.02 || physics.isChangingLie
                 || physics.angerIntensity.value > 0.02 || physics.dizzyIntensity.value > 0.02
+                || physics.scruffDizzyIntensity.value > 0.02
                 || wasYawning || physics.isYawning || (!isAsleep && (wasBlinking || physics.isBlinking))
             let ticksPerRedraw = isActive ? 1 : (isAsleep ? 3 : 2) // 60, 20, or 30 FPS on a 60 Hz tick.
             self.ticksSinceLastRedraw += 1
