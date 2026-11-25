@@ -1,0 +1,219 @@
+--- a/Sources/CatPhysics.swift
++++ b/Sources/CatPhysics.swift
+@@ -1430,7 +1430,7 @@
+ 
+         var h = SkinSpec(id: "builtin:2", name: "美短（银虎斑加白）", builtIn: true)
+         let silver = SkinColor.hex(0xC2C5C1)
+-        h.palette.body = silver; h.palette.legs = silver; h.palette.earOuter = silver; h.palette.tail = silver
++        h.palette.body = silver; h.palette.legs = milk; h.palette.earOuter = silver; h.palette.tail = silver
+         h.palette.belly = milk; h.palette.paws = milk; h.palette.stripes = .hex(0x55595A)
+         h.palette.whiskers = .hex(0x8D8170, 0.68); h.palette.crease = .hex(0x8B8171, 0.60)
+         h.headSurface = .plane; h.shape.pawStagger = 0
+@@ -1438,7 +1438,7 @@
+ 
+         var o = SkinSpec(id: "builtin:3", name: "橘白猫", builtIn: true)
+         let ginger = SkinColor.hex(0xD8AA73)
+-        o.palette.body = milk; o.palette.legs = ginger; o.palette.earOuter = ginger; o.palette.tail = ginger
++        o.palette.body = milk; o.palette.legs = milk; o.palette.earOuter = ginger; o.palette.tail = ginger
+         o.palette.belly = milk; o.palette.paws = milk; o.palette.stripes = .hex(0xA57543)
+         o.palette.whiskers = .hex(0x8D8170, 0.68); o.palette.crease = .hex(0x8B8171, 0.60)
+         o.headSurface = .dome; o.shape.pawStagger = 0
+--- a/Sources/CatRenderer.swift
++++ b/Sources/CatRenderer.swift
+@@ -303,9 +303,8 @@
+         let showWhiteOutline = settings.whiteOutline
+         // Pass 1: optional unified sticker-style outer white outline for ALL cat skins
+         if showWhiteOutline {
+-            if !tailInFront {
+-                drawTail(in: ctx, seatX: seatX, seatY: seatY, physics: physics, skin: skin, outlineOnly: true)
+-            }
++            // Outline connected parts before any fills so the tail root has no white seam.
++            drawTail(in: ctx, seatX: seatX, seatY: seatY, physics: physics, skin: skin, outlineOnly: true)
+             drawEarsLayer(in: ctx, center: localHeadCenter, physics: physics, skin: skin, outlineOnly: true)
+             drawUnifiedSilhouette(
+                 in: ctx,
+@@ -359,9 +358,6 @@
+         }
+ 
+         if tailInFront {
+-            if showWhiteOutline {
+-                drawTail(in: ctx, seatX: seatX, seatY: seatY, physics: physics, skin: skin, outlineOnly: true)
+-            }
+             drawTail(in: ctx, seatX: seatX, seatY: seatY, physics: physics, skin: skin)
+         }
+ 
+@@ -2365,13 +2361,16 @@
+         let idleBotX: CGFloat = bd.idleBotX * bw - lieS * 4.5
+         let idleBotY: CGFloat = seatY + 12.0 - lieS * 4.0
+         let shX: CGFloat = bd.shoulderX * bw
++        let approved = !skin.colorpoint && skin.palette.belly != nil && skin.palette.belly == skin.palette.legs && !skin.idleLegsTinted && !skin.marks.isEmpty
++        let shoulderDepth: CGFloat = approved ? 43 : 58
++        let faceClearance: CGFloat = approved ? 52 : 42
+         func shoulder(_ x: CGFloat) -> CGPoint {
+             let sy = physics.bodySquash.value * (1.0 - lieS * 0.42)
+             let sx = (1.0 + (1.0 - physics.bodySquash.value) * 0.55) * (1.0 + lieS * 0.03)
+             let c = cos(physics.bodyTilt.value), s = sin(physics.bodyTilt.value)
+-            let faceBottom = 126 + headLift + physics.headOffsetY.value + physics.headPitch.value * 4.8 + breath * 1.1 + 42
+-            return CGPoint(x: seatX + x*sx*c + 58*sy*s,
+-                           y: max(seatY + x*sx*s - 58*sy*c, faceBottom))
++            let faceBottom = 126 + headLift + physics.headOffsetY.value + physics.headPitch.value * 4.8 + breath * 1.1 + faceClearance
++            return CGPoint(x: seatX + x*sx*c + shoulderDepth*sy*s,
++                           y: max(seatY + x*sx*s - shoulderDepth*sy*c, faceBottom))
+         }
+         let leftShoulder = shoulder(-shX)
+         let rightShoulder = shoulder(shX)
+--- a/windows/src/CatRenderer.hpp
++++ b/windows/src/CatRenderer.hpp
+@@ -58,8 +58,8 @@
+ 
+         SkinSpec& h = v[2];
+         h.id = "builtin:2"; h.name = "美短（银虎斑加白）"; h.builtIn = true;
+-        h.palette.body = h.palette.legs = h.palette.earOuter = h.palette.tail = c8(0xC2, 0xC5, 0xC1);
+-        h.palette.belly = h.palette.paws = milk;
++        h.palette.body = h.palette.earOuter = h.palette.tail = c8(0xC2, 0xC5, 0xC1);
++        h.palette.belly = h.palette.paws = h.palette.legs = milk;
+         h.palette.stripes = c8(0x55, 0x59, 0x5A);
+         h.palette.whiskers = c8(0x8D, 0x81, 0x70, 174); h.palette.crease = c8(0x8B, 0x81, 0x71, 153);
+         h.headSurface = SkinHeadSurface::Plane; h.shape.pawStagger = 0;
+@@ -69,8 +69,8 @@
+         SkinSpec& o = v[3];
+         o.id = "builtin:3"; o.name = "橘白猫"; o.builtIn = true;
+         o.palette.body = milk;
+-        o.palette.legs = o.palette.earOuter = o.palette.tail = c8(0xD8, 0xAA, 0x73);
+-        o.palette.belly = o.palette.paws = milk;
++        o.palette.earOuter = o.palette.tail = c8(0xD8, 0xAA, 0x73);
++        o.palette.belly = o.palette.paws = o.palette.legs = milk;
+         o.palette.stripes = c8(0xA5, 0x75, 0x43);
+         o.palette.whiskers = c8(0x8D, 0x81, 0x70, 174); o.palette.crease = c8(0x8B, 0x81, 0x71, 153);
+         o.headSurface = SkinHeadSurface::Dome; o.shape.pawStagger = 0;
+@@ -307,7 +307,8 @@
+         bool tailInFront = (physics.tailTyping.value >= 0.5f) || (lieS >= 0.45f);
+         // Pass 1: unified sticker-style outer white outline for ALL cat skins (optional)
+         if (whiteOutlineEnabled()) {
+-            if (!tailInFront) drawTail(g, seatX, seatY, physics, skin, true);
++            // Outline connected parts first; fills cover the internal tail-root seam.
++            drawTail(g, seatX, seatY, physics, skin, true);
+             drawEarsLayer(g, headCenter, physics, skin, true);
+             drawUnifiedSilhouette(g, seatX, seatY, headCenter, breath, physics, skin, true);
+         }
+@@ -340,7 +341,7 @@
+         }
+ 
+         if (tailInFront) {
+-            if (whiteOutlineEnabled()) drawTail(g, seatX, seatY, physics, skin, true);
++
+             drawTail(g, seatX, seatY, physics, skin);
+         }
+ 
+@@ -2414,11 +2415,13 @@
+         float limbStartW = bd.limbStartW;
+         float limbEndW = bd.limbEndW;
+ 
++        const bool approved = !skin.palette.points.set && skin.palette.belly.set && skin.palette.belly.sameAs(skin.palette.legs) && !skin.idleLegsTinted && !skin.marks.empty();
++        const float shoulderDepth = approved ? 43.0f : 58.0f, faceClearance = approved ? 52.0f : 42.0f;
+         auto shoulder = [&](float x) -> Pt {
+             float sy=physics.bodySquash.value*(1.0f-lieS*0.42f), sx=(1+(1-physics.bodySquash.value)*0.55f)*(1.0f+lieS*0.03f);
+             float c=std::cos(physics.bodyTilt.value), s=std::sin(physics.bodyTilt.value);
+-            float floor=126+headLift+physics.headOffsetY.value+physics.headPitch.value*4.8f+breath*1.1f+42;
+-            return {seatX+x*sx*c+58*sy*s, std::max(seatY+x*sx*s-58*sy*c,floor)};
++            float floor=126+headLift+physics.headOffsetY.value+physics.headPitch.value*4.8f+breath*1.1f+faceClearance;
++            return {seatX+x*sx*c+shoulderDepth*sy*s, std::max(seatY+x*sx*s-shoulderDepth*sy*c,floor)};
+         };
+         Pt leftShoulder=shoulder(-shX), rightShoulder=shoulder(shX);
+ 
+--- a/linux/src/CatRenderer.hpp
++++ b/linux/src/CatRenderer.hpp
+@@ -58,8 +58,8 @@
+ 
+         SkinSpec& h = v[2];
+         h.id = "builtin:2"; h.name = "美短（银虎斑加白）"; h.builtIn = true;
+-        h.palette.body = h.palette.legs = h.palette.earOuter = h.palette.tail = SkinColor::hex(0xC2C5C1);
+-        h.palette.belly = h.palette.paws = milk;
++        h.palette.body = h.palette.earOuter = h.palette.tail = SkinColor::hex(0xC2C5C1);
++        h.palette.belly = h.palette.paws = h.palette.legs = milk;
+         h.palette.stripes = SkinColor::hex(0x55595A);
+         h.palette.whiskers = SkinColor::hex(0x8D8170, 0.68); h.palette.crease = SkinColor::hex(0x8B8171, 0.60);
+         h.headSurface = SkinHeadSurface::Plane; h.shape.pawStagger = 0;
+@@ -69,8 +69,8 @@
+         SkinSpec& o = v[3];
+         o.id = "builtin:3"; o.name = "橘白猫"; o.builtIn = true;
+         o.palette.body = milk;
+-        o.palette.legs = o.palette.earOuter = o.palette.tail = SkinColor::hex(0xD8AA73);
+-        o.palette.belly = o.palette.paws = milk;
++        o.palette.earOuter = o.palette.tail = SkinColor::hex(0xD8AA73);
++        o.palette.belly = o.palette.paws = o.palette.legs = milk;
+         o.palette.stripes = SkinColor::hex(0xA57543);
+         o.palette.whiskers = SkinColor::hex(0x8D8170, 0.68); o.palette.crease = SkinColor::hex(0x8B8171, 0.60);
+         o.headSurface = SkinHeadSurface::Dome; o.shape.pawStagger = 0;
+@@ -276,7 +276,8 @@
+         bool tailInFront = (physics.tailTyping.value >= 0.5f) || (lieS >= 0.45f);
+         // Pass 1: unified sticker-style outer white outline for ALL cat skins (optional)
+         if (whiteOutlineEnabled()) {
+-            if (!tailInFront) drawTail(cr, seatX, seatY, physics, skin, true);
++            // Outline connected parts first; fills cover the internal tail-root seam.
++            drawTail(cr, seatX, seatY, physics, skin, true);
+             drawEarsLayer(cr, headCenter, physics, skin, true);
+             drawUnifiedSilhouette(cr, seatX, seatY, headCenter, breath, physics, skin, true);
+         }
+@@ -297,7 +298,7 @@
+         }
+ 
+         if (tailInFront) {
+-            if (whiteOutlineEnabled()) drawTail(cr, seatX, seatY, physics, skin, true);
++
+             drawTail(cr, seatX, seatY, physics, skin);
+         }
+         cairo_restore(cr);
+@@ -2101,11 +2102,13 @@
+         float limbStartW = b.limbStartW;
+         float limbEndW = b.limbEndW;
+ 
++        const bool approved = !skin.palette.points.set && skin.palette.belly.set && skin.palette.belly.sameAs(skin.palette.legs) && !skin.idleLegsTinted && !skin.marks.empty();
++        const float shoulderDepth = approved ? 43.0f : 58.0f, faceClearance = approved ? 52.0f : 42.0f;
+         auto shoulder = [&](float x) -> Pt {
+             float sy=physics.bodySquash.value*(1.0f-lieS*0.42f), sx=(1+(1-physics.bodySquash.value)*0.55f)*(1.0f+lieS*0.03f);
+             float c=std::cos(physics.bodyTilt.value), s=std::sin(physics.bodyTilt.value);
+-            float floor=126+headLift+physics.headOffsetY.value+physics.headPitch.value*4.8f+breath*1.1f+42;
+-            return {seatX+x*sx*c+58*sy*s, std::max(seatY+x*sx*s-58*sy*c,floor)};
++            float floor=126+headLift+physics.headOffsetY.value+physics.headPitch.value*4.8f+breath*1.1f+faceClearance;
++            return {seatX+x*sx*c+shoulderDepth*sy*s, std::max(seatY+x*sx*s-shoulderDepth*sy*c,floor)};
+         };
+         Pt lSh=shoulder(-shX), rSh=shoulder(shX);
+ 
+--- a/scripts/generate-coat-patterns.py
++++ b/scripts/generate-coat-patterns.py
+@@ -127,10 +127,10 @@
+           'legs':POINT,'paws':POINT,'earOuter':POINT,'tail':POINT,'earInner':hx(.365,.275,.228),'outline':hx(.68,.59,.50,.42),
+           'crease':hx(.553,.471,.404,.54),'whiskers':hx(.478,.388,.325,.62),'nose':hx(.14,.09,.08,.95),'mouth':hx(.78,.66,.56,.55)},
+           {'build':'sleek'},'dome',None),
+- 'shorthair':('美短（银虎斑加白）',{'body':hexrgb(0xC2C5C1),'legs':hexrgb(0xC2C5C1),'earOuter':hexrgb(0xC2C5C1),'tail':hexrgb(0xC2C5C1),
++ 'shorthair':('美短（银虎斑加白）',{'body':hexrgb(0xC2C5C1),'legs':hexrgb(MILK),'earOuter':hexrgb(0xC2C5C1),'tail':hexrgb(0xC2C5C1),
+           'belly':hexrgb(MILK),'paws':hexrgb(MILK),'stripes':hexrgb(0x55595A),'whiskers':LIGHT_WHISKER,'crease':LIGHT_CREASE},
+           {'build':'standard','pawStagger':0},'plane',0x55595A),
+- 'orangeWhite':('橘白猫',{'body':hexrgb(MILK),'legs':hexrgb(GINGER),'earOuter':hexrgb(GINGER),'tail':hexrgb(GINGER),
++ 'orangeWhite':('橘白猫',{'body':hexrgb(MILK),'legs':hexrgb(MILK),'earOuter':hexrgb(GINGER),'tail':hexrgb(GINGER),
+           'belly':hexrgb(MILK),'paws':hexrgb(MILK),'stripes':hexrgb(0xA57543),'whiskers':LIGHT_WHISKER,'crease':LIGHT_CREASE},
+           {'build':'standard','pawStagger':0},'dome',0xA57543),
+ }
+--- a/skins/shorthair.kurocat
++++ b/skins/shorthair.kurocat
+@@ -4,7 +4,7 @@
+  "author": "KuroCat",
+  "palette": {
+   "body": "#C2C5C1",
+-  "legs": "#C2C5C1",
++  "legs": "#F2EEE4",
+   "earOuter": "#C2C5C1",
+   "tail": "#C2C5C1",
+   "belly": "#F2EEE4",
+--- a/skins/orangeWhite.kurocat
++++ b/skins/orangeWhite.kurocat
+@@ -4,7 +4,7 @@
+  "author": "KuroCat",
+  "palette": {
+   "body": "#F2EEE4",
+-  "legs": "#D8AA73",
++  "legs": "#F2EEE4",
+   "earOuter": "#D8AA73",
+   "tail": "#D8AA73",
+   "belly": "#F2EEE4",
