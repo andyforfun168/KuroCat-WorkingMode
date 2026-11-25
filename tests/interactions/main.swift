@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 final class MemoryPreferences {
+ func synchronize()->Bool { true }
  var values:[String:Any]=[:]
  func set(_ value:Any?,forKey key:String){values[key]=value}
  func object(forKey key:String)->Any?{values[key]}

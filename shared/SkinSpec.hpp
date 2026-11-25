@@ -28,6 +28,8 @@ enum class SkinSpace : int { Head = 0, Skull, Body, Tail, LeftEar, RightEar };
 enum class SkinBuild : int { Standard = 0, Sleek };
 enum class SkinHeadSurface : int { Dome = 0, Plane };
 enum class SkinAnchorPoint : int { HeadTop = 0, Face, Neck, TailTip };
+enum class SkinRenderStyle : int { Standard = 0, Douni };
+enum class SkinTypingStyle : int { Standard = 0, Douni };
 
 struct SkinPoint { float x = 0, y = 0; };
 // One pen-tool anchor; in/out are absolute handle positions in the same part space.
@@ -78,6 +80,8 @@ struct SkinSpec {
     std::vector<SkinMark> marks;
     SkinShape shape;
     SkinHeadSurface headSurface = SkinHeadSurface::Dome;
+    SkinRenderStyle renderStyle = SkinRenderStyle::Standard;
+    SkinTypingStyle typingStyle = SkinTypingStyle::Standard;
     // "idleLegs": "legs" (default) tints the sitting front legs with palette.legs, fading in from the
     // shoulder; "chest" leaves them chest-coloured (only paws + creases), as the built-in coats are drawn.
     bool idleLegsTinted = true;
@@ -488,6 +492,12 @@ inline bool SkinSpec::parse(const std::string& bytes, SkinSpec& out, std::string
     if (const Value* il = root.get("idleLegs")) {
         if (il->type != Value::JString || (il->s != "legs" && il->s != "chest")) { error = "idleLegs 必须是 \"legs\" 或 \"chest\""; return false; }
         s.idleLegsTinted = il->s == "legs";
+    }
+    if (const Value* rs = root.get("renderStyle"); rs && rs->type == Value::JString) {
+        if (rs->s == "douni") s.renderStyle = SkinRenderStyle::Douni;
+    }
+    if (const Value* ts = root.get("typingStyle"); ts && ts->type == Value::JString) {
+        if (ts->s == "douni") s.typingStyle = SkinTypingStyle::Douni;
     }
 
     // Regions (pen-tool curve areas)

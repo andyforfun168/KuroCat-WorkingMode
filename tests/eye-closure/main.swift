@@ -58,3 +58,21 @@ for coat in CatCoatTheme.allCases {
 }
 precondition(oldFringe > 0,"Fixture did not reproduce original defect")
 print("PASS: both eyes / four skins / all six eye themes; five legacy closure states; open eyes unchanged, covered pixels untouched, fully closed eyes invisible. Original contaminated pixels: \(oldFringe)")
+
+// Anger may only remove iris pixels; it must never paint over the surrounding fur.
+for coat in [CatCoatTheme.orangeWhite, .shorthair] {
+ for left in [true,false] {
+  physics.angerIntensity.value=0
+  let calm=render(false,coat,0,left)
+  physics.angerIntensity.value=1
+  let angry=render(false,coat,0,left)
+  for i in stride(from:0,to:calm.count,by:4) {
+   if Array(calm[i..<i+4]) == Array(baseline[i..<i+4]) {
+    precondition(Array(angry[i..<i+4]) == Array(baseline[i..<i+4]), "Angry lid painted over forehead")
+   }
+  }
+  precondition(angry != calm,"Angry expression disappeared")
+ }
+}
+physics.angerIntensity.value=0
+print("PASS: patterned angry eyes retain surrounding fur and still show anger")

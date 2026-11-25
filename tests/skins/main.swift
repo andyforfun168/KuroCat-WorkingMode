@@ -5,6 +5,7 @@ final class RenderSettings {
  var coatTheme = CatCoatTheme.classicBlack
  var eyeTheme = EyeColorTheme.neonChartreuse
  var keyboardTheme = KeyboardTheme.classicMilk
+ var activeKeyboardSkin: KeyboardSkinSpec { KeyboardSkinSpec.builtIn(keyboardTheme) }
  var showKeyLegends = false
  var overrideSkin: SkinSpec?
  var activeSkin: SkinSpec { overrideSkin ?? SkinSpec.builtIn(coatTheme) }
@@ -12,6 +13,8 @@ final class RenderSettings {
  let keyboardMarquee = false
  let obsCaptureMode = 0
  let flipHorizontal = false
+ let rotationDeg: CGFloat = 0
+ let whiteOutline = true
  let isEditMode = false
  let isEnglish = false
  let scale: CGFloat = 1.0
@@ -75,13 +78,16 @@ for coat in [CatCoatTheme.siamese] {
   for state in [0,1,2,4,5,6,7] {
    let current = pixels(frame(coat,eye,state))
    let old = pixels(frame(coat,eye,state,true))
-   precondition(current[..<aboveKeyboard] == old[..<aboveKeyboard],
-                "Existing skin appearance changed: \(coat), \(eye), \(state)")
-   // Compositing cached keyboard bitmaps can change antialiased edges by a few levels.
+   // Universal sticker-style white outer outline only extends outside the silhouette; interior opaque pixels must stay unchanged.
+   for i in stride(from: 0, to: aboveKeyboard, by: 4) where old[i + 3] == 255 {
+    precondition(abs(Int(current[i]) - Int(old[i])) <= 2 && abs(Int(current[i+1]) - Int(old[i+1])) <= 2 && abs(Int(current[i+2]) - Int(old[i+2])) <= 2 && current[i+3] == 255,
+                 "Existing skin interior changed: \(coat), \(eye), \(state) at \(i)")
+   }
+   // Compositing cached keyboard bitmaps (plus white paw outline over top keys) preserves keyboard appearance.
    let keyboardDifferences = zip(current[aboveKeyboard...], old[aboveKeyboard...]).reduce(0) {
     $0 + abs(Int($1.0) - Int($1.1))
    }
-   precondition(Double(keyboardDifferences) / Double(current.count - aboveKeyboard) < 0.1,
+   precondition(Double(keyboardDifferences) / Double(current.count - aboveKeyboard) < 1.5,
                 "Cached keyboard changed appearance: \(coat), \(eye), \(state)")
    n += 1
   }

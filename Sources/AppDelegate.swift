@@ -14,9 +14,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var isPetVisible = true
     private var isHandingOverToNewerCopy = false
     private var dressingRoom: DressingRoomWindowController?
+    private var settingsWindow: SettingsWindowController?
 
     private var currentAppVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.4.1"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.4.2"
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -36,7 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             NSMenu.popUpContextMenu(menu, with: event, for: self.overlayWindow.catView)
         }
         catView.onDropSkinFiles = { [weak self] urls in
-            for url in urls { self?.importSkin(from: url) }
+            for url in urls { self?.importDroppedFile(from: url) }
         }
 
         // Wire dual-layer InputEngine -> CatPhysics
@@ -276,84 +277,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        // Visibility & Interactive modes
+        // Essential everyday actions only — everything else lives cleanly in the unified Settings window!
         let visItem = NSMenuItem(title: isPetVisible ? tr("隐藏桌宠", "Hide Pet") : tr("显示桌宠", "Show Pet"), action: #selector(toggleVisibility), keyEquivalent: "")
         visItem.target = self
         menu.addItem(visItem)
 
-        let clickThroughItem = NSMenuItem(title: tr("完全鼠标穿透 (按住 ⌥Option 可临时右键/拖动)", "Full Click-Through (Hold ⌥Option to Drag/Menu)"), action: #selector(toggleClickThrough), keyEquivalent: "")
-        clickThroughItem.target = self
-        clickThroughItem.state = settings.fullClickThrough ? .on : .off
-        menu.addItem(clickThroughItem)
-
-        let fullscreenItem = NSMenuItem(title: tr("全屏游戏/应用置顶显示", "Always On Top Over Fullscreen"), action: #selector(toggleFullScreenOverlay), keyEquivalent: "")
-        fullscreenItem.target = self
-        fullscreenItem.state = settings.fullScreenOverlay ? .on : .off
-        menu.addItem(fullscreenItem)
-
-        let autoHideFsItem = NSMenuItem(title: tr("全屏应用时自动隐藏", "Auto-Hide in Fullscreen Apps"), action: #selector(toggleAutoHideFullscreen), keyEquivalent: "")
-        autoHideFsItem.target = self
-        autoHideFsItem.state = settings.autoHideFullscreen ? .on : .off
-        menu.addItem(autoHideFsItem)
-
-        let autoStartItem = NSMenuItem(title: tr("开机自动启动", "Launch at Login"), action: #selector(toggleAutoStart), keyEquivalent: "")
-        autoStartItem.target = self
-        autoStartItem.state = isAutoStartEnabled() ? .on : .off
-        menu.addItem(autoStartItem)
-
-        menu.addItem(.separator())
-
-        // Features
-        let badgesItem = NSMenuItem(title: tr("显示按键气泡 ([S] [W] [⇧])", "Show Key & Click Badges"), action: #selector(toggleKeyBadges), keyEquivalent: "")
-        badgesItem.target = self
-        badgesItem.state = settings.showKeyBadges ? .on : .off
-        menu.addItem(badgesItem)
-
-        let legendsItem = NSMenuItem(title: tr("显示键盘字符", "Show Keycap Legends"), action: #selector(toggleKeyLegends), keyEquivalent: "")
-        legendsItem.target = self
-        legendsItem.state = settings.showKeyLegends ? .on : .off
-        menu.addItem(legendsItem)
-
-        let marqueeItem = NSMenuItem(title: tr("键盘跑马灯流光", "Keyboard RGB Marquee"), action: #selector(toggleKeyboardMarquee), keyEquivalent: "")
-        marqueeItem.target = self
-        marqueeItem.state = settings.keyboardMarquee ? .on : .off
-        menu.addItem(marqueeItem)
-
-        // OBS Live Capture Mode submenu
-        let obsMenu = NSMenu()
-        let obsModes: [(String, Int)] = [
-            (tr("关闭（正常桌面悬浮）", "Off (Normal Overlay)"), 0),
-            (tr("OBS 透明窗口捕获", "OBS Transparent Window Capture"), 1),
-            (tr("OBS 绿幕模式 (#00FF00)", "OBS Green Screen (#00FF00)"), 2)
-        ]
-        for (title, mode) in obsModes {
-            let item = NSMenuItem(title: title, action: #selector(selectOBSCaptureMode(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = NSNumber(value: mode)
-            item.state = (settings.obsCaptureMode == mode) ? .on : .off
-            obsMenu.addItem(item)
-        }
-        obsMenu.addItem(.separator())
-        let obsHideItem = NSMenuItem(
-            title: tr("后台捕获（隐藏桌面小猫，OBS仍正常捕获）", "Background Capture (Hide on Desktop)"),
-            action: #selector(toggleOBSHideDesktop),
-            keyEquivalent: ""
-        )
-        obsHideItem.target = self
-        obsHideItem.state = settings.obsHideDesktop ? .on : .off
-        obsHideItem.isEnabled = (settings.obsCaptureMode > 0)
-        obsMenu.addItem(obsHideItem)
-        let obsParent = NSMenuItem(title: tr("📺 直播捕获模式 (OBS)", "📺 OBS Live Capture Mode"), action: nil, keyEquivalent: "")
-        obsParent.submenu = obsMenu
-        menu.addItem(obsParent)
-
-        menu.addItem(.separator())
-
-        // Interactive resize & flip toggle (replaces static scale submenu; also triggered by double-clicking cat)
         let editItem = NSMenuItem(
             title: settings.isEditMode
-                ? tr("✓ 完成调整大小与方向", "✓ Finish Resize & Flip")
-                : tr("调整大小与方向 (双击小猫)", "Resize & Flip (Double-Click Cat)"),
+                ? tr("✓ 完成调整大小与方向", "✓ Finish Resize & Direction")
+                : tr("调整大小与方向 (双击小猫)", "Resize & Direction (Double-Click)"),
             action: #selector(toggleEditMode),
             keyEquivalent: ""
         )
@@ -361,7 +293,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         editItem.state = settings.isEditMode ? .on : .off
         menu.addItem(editItem)
 
-        // Cat coat submenu
+        // Quick Cat Skin switcher submenu
         let coatMenu = NSMenu()
         let library = SkinLibrary.shared
         let customActive = library.skin(id: settings.customSkin) != nil
@@ -383,7 +315,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item.state = !customActive && settings.coatTheme == coat ? .on : .off
             coatMenu.addItem(item)
         }
-        // Imported .kurocat skins (docs/skin-format.md)
         if !library.skins.isEmpty {
             coatMenu.addItem(.separator())
             for skin in library.skins {
@@ -399,10 +330,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let importItem = NSMenuItem(title: tr("导入皮肤…", "Import Skin…"), action: #selector(showDressingRoom), keyEquivalent: "")
         importItem.target = self
         coatMenu.addItem(importItem)
-        let workshopItem = NSMenuItem(title: tr("打开皮肤工坊（制作皮肤）…", "Open Skin Workshop…"), action: #selector(openSkinWorkshop), keyEquivalent: "")
+        let workshopItem = NSMenuItem(title: tr("打开皮肤工坊…", "Open Skin Workshop…"), action: #selector(openSkinWorkshop), keyEquivalent: "")
         workshopItem.target = self
         coatMenu.addItem(workshopItem)
-        let openDirItem = NSMenuItem(title: tr("打开皮肤文件夹（备份）", "Open Skins Folder (Backup)"), action: #selector(openSkinsFolder), keyEquivalent: "")
+        let openDirItem = NSMenuItem(title: tr("打开皮肤文件夹", "Open Skins Folder"), action: #selector(openSkinsFolder), keyEquivalent: "")
         openDirItem.target = self
         coatMenu.addItem(openDirItem)
         if !library.skins.isEmpty {
@@ -421,85 +352,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         coatParent.submenu = coatMenu
         menu.addItem(coatParent)
 
-        // Keyboard Theme submenu
-        let kbMenu = NSMenu()
-        for theme in KeyboardTheme.allCases {
-            let kbTitle: String
-            if en {
-                switch theme {
-                case .classicMilk: kbTitle = "Classic Milk White"
-                case .midnightHacker: kbTitle = "Midnight Hacker Black"
-                case .retroCream: kbTitle = "Retro Cream Gray"
-                }
-            } else {
-                kbTitle = theme.rawValue
-            }
-            let item = NSMenuItem(title: kbTitle, action: #selector(selectKeyboardTheme(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = theme.rawValue
-            item.state = settings.keyboardTheme == theme ? .on : .off
-            kbMenu.addItem(item)
-        }
-        let kbParent = NSMenuItem(title: tr("键盘配色", "Keyboard Theme"), action: nil, keyEquivalent: "")
-        kbParent.submenu = kbMenu
-        menu.addItem(kbParent)
-
-        // Eye Color submenu
-        let eyeMenu = NSMenu()
-        for eye in EyeColorTheme.allCases {
-            let eyeTitle: String
-            if en {
-                switch eye {
-                case .neonChartreuse: eyeTitle = "Neon Chartreuse"
-                case .siameseBlue: eyeTitle = "Siamese Ice Blue"
-                case .warmAmber: eyeTitle = "Warm Amber"
-                case .iceCyan: eyeTitle = "Ice Cyan"
-                case .softAmber: eyeTitle = "Soft Amber"
-                case .referenceHazel: eyeTitle = "Golden Hazel"
-                }
-            } else {
-                eyeTitle = eye.rawValue
-            }
-            let item = NSMenuItem(title: eyeTitle, action: #selector(selectEyeTheme(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = eye.rawValue
-            item.state = settings.eyeTheme == eye ? .on : .off
-            eyeMenu.addItem(item)
-        }
-        let eyeParent = NSMenuItem(title: tr("瞳色切换", "Eye Color"), action: nil, keyEquivalent: "")
-        eyeParent.submenu = eyeMenu
-        menu.addItem(eyeParent)
-
-        // Drawing Tablet & Stylus submenu
-        let tabMenu = NSMenu()
-        let tabOptions: [(String, Int)] = [
-            (tr("自动检测（连接数位板时自动切换）", "Auto-Detect (Switch When Connected)"), 0),
-            (tr("始终显示数位板与触控笔", "Always Show Tablet & Stylus"), 1),
-            (tr("始终显示鼠标", "Always Show Mouse"), 2)
-        ]
-        for (title, mode) in tabOptions {
-            let item = NSMenuItem(title: title, action: #selector(selectTabletMode(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = mode
-            item.state = (settings.tabletMode == mode) ? .on : .off
-            tabMenu.addItem(item)
-        }
-        let tabParent = NSMenuItem(title: tr("🎨 数位板与触控笔", "🎨 Drawing Tablet & Stylus"), action: nil, keyEquivalent: "")
-        tabParent.submenu = tabMenu
-        menu.addItem(tabParent)
-
-        // Language submenu
-        let langMenu = NSMenu()
-        for (title, code) in [("简体中文", "zh"), ("English", "en")] {
-            let item = NSMenuItem(title: title, action: #selector(selectLanguage(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = code
-            item.state = (settings.language == code) ? .on : .off
-            langMenu.addItem(item)
-        }
-        let langParent = NSMenuItem(title: "🌐 语言 / Language", action: nil, keyEquivalent: "")
-        langParent.submenu = langMenu
-        menu.addItem(langParent)
+        let settingsItem = NSMenuItem(title: tr("⚙️ 设置…", "⚙️ Settings…"), action: #selector(openSettingsWindow), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
 
         menu.addItem(.separator())
 
@@ -514,6 +369,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(quitItem)
 
         return menu
+    }
+
+    @objc private func openSettingsWindow() {
+        if settingsWindow == nil {
+            let ctrl = SettingsWindowController()
+            ctrl.onSettingsChanged = { [weak self] in
+                self?.overlayWindow.catView.needsDisplay = true
+                self?.dressingRoom?.refresh()
+            }
+            ctrl.onScaleChanged = { [weak self] newScale in
+                self?.overlayWindow.applyScale(newScale)
+            }
+            ctrl.onResetPoseAndPosition = { [weak self] in
+                self?.overlayWindow.applyScale(1.0)
+                self?.overlayWindow.resetPosition()
+                self?.overlayWindow.catView.needsDisplay = true
+            }
+            ctrl.onOpenDressingRoom = { [weak self] in
+                self?.showDressingRoom()
+            }
+            ctrl.onImportKeyboardSkin = { [weak self] in
+                self?.promptImportKeyboardSkin()
+            }
+            ctrl.onApplyWindowLevel = { [weak self] in
+                self?.overlayWindow.applyWindowLevelAndBehavior()
+                self?.syncWindowTopmost()
+            }
+            ctrl.onApplyOBSMode = { [weak self] in
+                self?.overlayWindow.applyOBSMode()
+            }
+            ctrl.onAutoHideChanged = { [weak self] in
+                guard let self else { return }
+                if !CatSettings.shared.autoHideFullscreen && self.hiddenByFullscreen {
+                    self.hiddenByFullscreen = false
+                    self.overlayWindow.alphaValue = 1.0
+                }
+            }
+            ctrl.getAutoStart = { [weak self] in
+                self?.isAutoStartEnabled() ?? false
+            }
+            ctrl.setAutoStart = { [weak self] on in
+                _ = self?.setAutoStartEnabled(on)
+            }
+            ctrl.onLanguageChanged = { [weak self] in
+                self?.overlayWindow.catView.needsDisplay = true
+            }
+            settingsWindow = ctrl
+        }
+        settingsWindow?.present()
     }
 
     // MARK: - Actions
@@ -752,14 +656,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             CatSettings.shared.eyeTheme = .warmAmber
         }
         dressingRoom?.refresh()
+        settingsWindow?.refresh()
     }
 
     // MARK: - Imported skins (换装间)
 
     private static let skinWorkshopURLString = "https://chanke17.github.io/KuroCat-Workshop/"
+    private static let keyboardPlazaURLString = "https://chanke17.github.io/KuroCat-Workshop/#keyboards"
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls where url.pathExtension.lowercased() == "kurocat" {
+        for url in urls {
+            importDroppedFile(from: url)
+        }
+    }
+
+    private func importDroppedFile(from url: URL) {
+        if KeyboardSkinSpec.looksLikeKeyboardJSON(url) {
+            importKeyboardSkin(from: url)
+        } else if url.pathExtension.lowercased() == "kurocat" {
             importSkin(from: url)
         }
     }
@@ -795,6 +709,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if let author = skin?.author, !author.isEmpty { message += "（作者：\(author)）" }
             dressingRoom?.setStatus("✓ " + message, kind: 1)
             dressingRoom?.refresh()
+            settingsWindow?.refresh()
         } catch {
             let reason = error.localizedDescription
             // With 换装间 open the red status line explains it in place; an alert is only for drops onto the cat.
@@ -816,6 +731,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let id = sender.representedObject as? String else { return }
         CatSettings.shared.customSkin = id
         dressingRoom?.refresh()
+        settingsWindow?.refresh()
     }
 
     @objc private func deleteCustomSkin(_ sender: NSMenuItem) {
@@ -836,12 +752,87 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if CatSettings.shared.customSkin == id { CatSettings.shared.customSkin = "" }
         dressingRoom?.refresh()
+        settingsWindow?.refresh()
     }
 
     @objc private func selectKeyboardTheme(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,
               let theme = KeyboardTheme(rawValue: raw) else { return }
+        CatSettings.shared.customKeyboard = ""
         CatSettings.shared.keyboardTheme = theme
+    }
+
+    @objc private func selectCustomKeyboard(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        CatSettings.shared.customKeyboard = id
+    }
+
+    @objc private func openKeyboardPlaza() {
+        if let url = URL(string: Self.keyboardPlazaURLString) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    @objc private func openKeyboardsFolder() {
+        let dir = KeyboardSkinLibrary.directory
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(dir)
+    }
+
+    @objc private func promptImportKeyboardSkin() {
+        let en = CatSettings.shared.isEnglish
+        let panel = NSOpenPanel()
+        panel.title = en ? "Choose Keyboard Skin (.kurokb / .json)" : "选择键盘皮肤文件 (.kurokb / .json)"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedFileTypes = ["kurokb", "json"]
+        NSApp.activate(ignoringOtherApps: true)
+        if panel.runModal() == .OK, let url = panel.url {
+            importKeyboardSkin(from: url)
+        }
+    }
+
+    private func importKeyboardSkin(from url: URL) {
+        do {
+            let id = try KeyboardSkinLibrary.shared.importFile(url)
+            CatSettings.shared.customKeyboard = id
+            let kb = KeyboardSkinLibrary.shared.skin(id: id)
+            var message = "已换上键盘皮肤「\(kb?.name ?? "新键盘")」"
+            if let author = kb?.author, !author.isEmpty { message += "（作者：\(author)）" }
+            dressingRoom?.setStatus("✓ " + message, kind: 1)
+            overlayWindow.catView.needsDisplay = true
+            settingsWindow?.refresh()
+        } catch {
+            let en = CatSettings.shared.isEnglish
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = en ? "Failed to Import Keyboard Skin" : "无法导入这个键盘皮肤"
+            alert.informativeText = "「\(url.lastPathComponent)」：\(error.localizedDescription)"
+            alert.addButton(withTitle: en ? "OK" : "知道了")
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+        }
+    }
+
+    @objc private func deleteCustomKeyboard(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String, let kb = KeyboardSkinLibrary.shared.skin(id: id) else { return }
+        let alert = NSAlert()
+        alert.messageText = "删除键盘皮肤「\(kb.name)」？"
+        alert.informativeText = "会从键盘皮肤文件夹里删除这个文件，删除后需要重新导入。"
+        alert.addButton(withTitle: "删除")
+        alert.addButton(withTitle: "取消")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        if !KeyboardSkinLibrary.shared.remove(id: id) {
+            let failed = NSAlert()
+            failed.messageText = "删除失败"
+            failed.informativeText = "无法删除 \(KeyboardSkinLibrary.directory.appendingPathComponent("\(id).kurokb").path)"
+            failed.runModal()
+            return
+        }
+        if CatSettings.shared.customKeyboard == id { CatSettings.shared.customKeyboard = "" }
+        settingsWindow?.refresh()
     }
 
     @objc private func selectEyeTheme(_ sender: NSMenuItem) {

@@ -1,8 +1,10 @@
 # 🐱 KuroCat — Full-State Keyboard & Mouse Desktop Cat Pet (macOS / Windows / Linux / UOS)
 
 <p align="center">
-  <a href="README.md">简体中文</a> Fork of [chanke17/KuroCat](https://github.com/chanke17/KuroCat). v1.4.1 integrates upstream v1.4.0 features including custom skins, the dressing room, new poses and expressions, tablet support, mirroring and OBS options. This fork retains its orange-eye icon, approved Shorthair / Orange & White pure-white arms and shoulder attachment, facial artwork and paired eye colors. No in-app updater; download manually from [this fork’s Releases](https://github.com/andyforfun168/KuroCatAndy/releases/latest).
+  <a href="README.md">简体中文</a> | <b>English</b>
 </p>
+
+v1.4.2 integrates upstream v1.4.1, including native settings, custom keyboard skins, rotation, drag physics and all v1.4.0 features. It retains the approved white arms, paired eye colors and orange-eye icon, fixes the sleeping tail-root seam and patterned angry lids, and has no in-app updater.
 
 <p align="center">
   <img src="assets/demo_typing.gif" width="265" alt="Typing on keyboard"/>
@@ -44,7 +46,7 @@
   - v1.3.8 also includes macOS/Linux stuck-key recovery and the Windows Alt/right-click menu fix, while retaining this fork's orange-eye icon, paired skin eye colors and manual Release downloads.
 
 
-- **🆕 v1.4.1 features**
+- **🆕 v1.4.2 features**
   - Import / export custom `.kurocat` skins in the dressing room; see the [skin format guide](docs/skin-format.md).
   - Yawning, curled sleeping, fast-typing anger and mouse-shaking dizziness; graphics tablet and stylus modes.
   - Horizontal mirroring, OBS capture options, edit mode, language options and fullscreen auto-hide, with upstream platform fixes.

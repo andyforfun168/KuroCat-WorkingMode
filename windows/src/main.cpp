@@ -41,7 +41,7 @@ using std::max;
 
 namespace {
 
-constexpr const wchar_t* APP_VERSION = L"1.4.1";
+constexpr const wchar_t* APP_VERSION = L"1.4.2";
 constexpr const wchar_t* VERSION_PROP = L"KuroCatVersion"; // set on the tray owner window so newer builds can take over older ones
 constexpr const wchar_t* TRAY_OWNER_CLASS = L"KuroCatTrayOwnerClass";
 constexpr const wchar_t* OVERLAY_CLASS = L"KuroCatOverlayWindowClass";
@@ -105,11 +105,18 @@ enum MenuCmd : UINT {
     CMD_IMPORT_SKIN,
     CMD_OPEN_WORKSHOP,
     CMD_OPEN_SKINS_DIR,
+    CMD_IMPORT_KB,
+    CMD_OPEN_KB_PLAZA,
+    CMD_OPEN_KB_DIR,
+    CMD_OPEN_SETTINGS,
     CMD_SKIN_SELECT_BASE = 4000,  // + index into AppState::skins.skins
     CMD_SKIN_DELETE_BASE = 5000,
+    CMD_KB_SELECT_BASE = 6000,    // + index into AppState::kbLibrary.skins
+    CMD_KB_DELETE_BASE = 7000,
     CMD_SKIN_RANGE = 900
 };
 constexpr const wchar_t* DRESSING_ROOM_CLASS = L"KuroCatDressingRoomClass";
+constexpr const wchar_t* SETTINGS_WINDOW_CLASS = L"KuroCatSettingsWindowClass";
 constexpr int IDC_DRESSING_CHOOSE = 11;
 
 struct AppState {
@@ -122,16 +129,27 @@ struct AppState {
     InputEngine input;
     CatPhysics physics;
     SkinLibrary skins;
+    KeyboardSkinLibrary kbLibrary;
     HWND dressingRoom = nullptr;    // 「换装间」 import window (nullptr when closed)
     std::wstring dressingStatusText;  // status line of 换装间; kind 0 neutral, 1 success, 2 error
     int dressingStatusKind = 0;
     float dressingScale = 1.0f;       // DPI scale of the 换装间 layout (design units are 96-dpi pixels)
+    HWND settingsWnd = nullptr;     // unified native Settings window (nullptr when closed)
+    HFONT settingsFont = nullptr;
+    HFONT settingsBoldFont = nullptr;
+    HBRUSH settingsBgBrush = nullptr;
+    bool settingsDark = false;
+    bool settingsUpdating = false;
 
     bool isVisible = true;
     bool hiddenByFullscreen = false;
     bool isDragging = false;
     int activeResizeCorner = -1; // -1 = none, 0=TL, 1=TR, 2=BL, 3=BR
     POINT resizeAnchorScreenPt = {};
+    bool isRotating = false;
+    bool rotateMoved = false;
+    float rotateStartAngle = 0.0f;
+    float rotateStartDeg = 0.0f;
     bool rButtonDown = false;
     bool pendingMenuAfterAlt = false;
     POINT pendingMenuPt = {};
@@ -633,6 +651,22 @@ const SkinSpec& activeSkin(const AppState& app) {
     return builtInSkin(app.settings.coatTheme);
 }
 
+const KeyboardSkinSpec& builtInKeyboardSkin(KeyboardTheme theme) {
+    static const KeyboardSkinSpec themes[3] = {
+        KeyboardSkinSpec::builtInTheme(0),
+        KeyboardSkinSpec::builtInTheme(1),
+        KeyboardSkinSpec::builtInTheme(2)
+    };
+    int i = std::clamp((int)theme, 0, 2);
+    return themes[i];
+}
+
+const KeyboardSkinSpec& activeKeyboardSkin(const AppState& app) {
+    if (!app.settings.customKeyboard.empty())
+        if (const KeyboardSkinSpec* k = app.kbLibrary.find(app.settings.customKeyboard)) return *k;
+    return builtInKeyboardSkin(app.settings.keyboardTheme);
+}
+
 void allowDropsWhenElevated(HWND hwnd) {
     // An elevated KuroCat would otherwise never see files dragged from the (non-elevated) Explorer.
     ChangeWindowMessageFilterEx(hwnd, WM_DROPFILES, MSGFLT_ALLOW, nullptr);
@@ -646,8 +680,11 @@ void setDressingStatus(AppState& app, const std::wstring& text, int kind) {
     if (app.dressingRoom) InvalidateRect(app.dressingRoom, nullptr, FALSE);
 }
 
+void refreshSettingsWindow(AppState& app);
+
 void refreshDressingRoom(AppState& app) {
     if (app.dressingRoom) InvalidateRect(app.dressingRoom, nullptr, FALSE);
+    refreshSettingsWindow(app);
 }
 
 // Imports one file; on success switches to it. Errors are shown in Chinese.
@@ -674,6 +711,38 @@ bool importSkinFile(AppState& app, const std::wstring& path) {
     return true;
 }
 
+bool importKeyboardSkinFile(AppState& app, const std::wstring& path) {
+    std::string id, error;
+    size_t slash = path.find_last_of(L"\\/");
+    std::wstring base = path.substr(slash == std::wstring::npos ? 0 : slash + 1);
+    if (!app.kbLibrary.importFile(path, id, error)) {
+        if (app.dressingRoom) {
+            setDressingStatus(app, L"没能导入键盘皮肤「" + base + L"」：" + utf8ToWide(error), 2);
+        } else {
+            std::wstring msg = L"「" + base + L"」：" + utf8ToWide(error);
+            MessageBoxW(app.menuOwnerHwnd, msg.c_str(),
+                        app.settings.isEnglish ? L"Failed to Import Keyboard Skin" : L"无法导入这个键盘皮肤",
+                        MB_OK | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND);
+        }
+        return false;
+    }
+    app.settings.customKeyboard = id;
+    app.settings.saveToRegistry();
+    const KeyboardSkinSpec* kb = app.kbLibrary.find(id);
+    std::wstring msg = L"✓ 已换上键盘皮肤「" + (kb ? utf8ToWide(kb->name) : std::wstring(L"新键盘")) + L"」";
+    if (kb && !kb->author.empty()) msg += L"（作者：" + utf8ToWide(kb->author) + L"）";
+    setDressingStatus(app, msg, 1);
+    if (!app.dressingRoom) showTrayBalloon(app, L"KuroCat 键盘皮肤", msg.c_str());
+    return true;
+}
+
+bool hasExtensionIgnoreCase(const std::wstring& path, const wchar_t* targetExt) {
+    size_t slash = path.find_last_of(L"\\/");
+    size_t dot = path.find_last_of(L'.');
+    if (dot == std::wstring::npos || (slash != std::wstring::npos && dot < slash)) return false;
+    return _wcsicmp(path.c_str() + dot + 1, targetExt) == 0;
+}
+
 void importDroppedFiles(AppState& app, HDROP drop) {
     UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
     std::vector<std::wstring> files;
@@ -685,7 +754,13 @@ void importDroppedFiles(AppState& app, HDROP drop) {
         files.push_back(f);
     }
     DragFinish(drop);
-    for (const auto& f : files) importSkinFile(app, f);
+    for (const auto& f : files) {
+        if (KeyboardSkinLibrary::looksLikeKeyboardFile(f)) {
+            importKeyboardSkinFile(app, f);
+        } else if (hasExtensionIgnoreCase(f, L"kurocat")) {
+            importSkinFile(app, f);
+        }
+    }
 }
 
 void chooseSkinFile(AppState& app) {
@@ -709,7 +784,36 @@ void chooseSkinFile(AppState& app) {
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_EXPLORER;
     BOOL ok = getOpen(&ofn);
     FreeLibrary(dlg);
-    if (ok) importSkinFile(app, file);
+    if (ok) {
+        if (KeyboardSkinLibrary::looksLikeKeyboardFile(file)) importKeyboardSkinFile(app, file);
+        else importSkinFile(app, file);
+    }
+}
+
+void chooseKeyboardSkinFile(AppState& app) {
+    typedef BOOL (WINAPI *GetOpenFileNameFn)(LPOPENFILENAMEW);
+    HMODULE dlg = LoadLibraryW(L"comdlg32.dll");
+    auto getOpen = dlg ? (GetOpenFileNameFn)(void*)GetProcAddress(dlg, "GetOpenFileNameW") : nullptr;
+    if (!getOpen) {
+        if (dlg) FreeLibrary(dlg);
+        MessageBoxW(app.menuOwnerHwnd,
+                    app.settings.isEnglish ? L"Unable to open file dialog. Please drag a .kurokb or .json file onto the cat."
+                                           : L"无法打开文件选择框，请直接把 .kurokb / .json 文件拖到小猫身上。",
+                    L"KuroCat", MB_OK | MB_ICONWARNING | MB_TOPMOST);
+        return;
+    }
+    wchar_t file[MAX_PATH * 4] = {0};
+    OPENFILENAMEW ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = app.menuOwnerHwnd;
+    ofn.lpstrFilter = L"KuroCat \u952E\u76D8\u76AE\u80A4 (*.kurokb;*.json)\0*.kurokb;*.json\0\u6240\u6709\u6587\u4EF6 (*.*)\0*.*\0";
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = (DWORD)(sizeof(file) / sizeof(file[0]));
+    ofn.lpstrTitle = app.settings.isEnglish ? L"Choose Keyboard Skin (.kurokb / .json)" : L"\u9009\u62E9\u952E\u76D8\u76AE\u80A4\u6587\u4EF6 (.kurokb / .json)";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_EXPLORER;
+    BOOL ok = getOpen(&ofn);
+    FreeLibrary(dlg);
+    if (ok) importKeyboardSkinFile(app, file);
 }
 
 // MARK: 「换装间」 window — GDI+ painted: live preview of the worn skin, dashed drop zone, pill button.
@@ -783,7 +887,8 @@ void paint(AppState& app, HWND hwnd, HDC hdc) {
         settings.showKeyLegends = false;
         settings.isEditMode = false;
         settings.flipHorizontal = false;
-        CatRenderer::draw(g, pose, settings, activeSkin(app));
+        settings.rotationDeg = 0.0f;
+        CatRenderer::draw(g, pose, settings, activeSkin(app), activeKeyboardSkin(app));
         g.Restore(st);
         g.SetTextRenderingHint(TextRenderingHintClearTypeGridFit);
     }
@@ -949,6 +1054,570 @@ void confirmDeleteSkin(AppState& app, const std::string& id) {
     refreshDressingRoom(app);
 }
 
+void confirmDeleteKeyboardSkin(AppState& app, const std::string& id) {
+    const KeyboardSkinSpec* kb = app.kbLibrary.find(id);
+    if (!kb) return;
+    std::wstring q = L"\u5220\u9664\u952E\u76D8\u76AE\u80A4\u300C" + utf8ToWide(kb->name) + L"\u300D\uFF1F\n\n\u4F1A\u4ECE\u952E\u76D8\u76AE\u80A4\u6587\u4EF6\u5939\u91CC\u5220\u9664\u8FD9\u4E2A\u6587\u4EF6\uFF0C\u5220\u9664\u540E\u9700\u8981\u91CD\u65B0\u5BFC\u5165\u3002";
+    if (MessageBoxW(app.menuOwnerHwnd, q.c_str(), L"KuroCat", MB_YESNO | MB_ICONQUESTION | MB_TOPMOST | MB_SETFOREGROUND | MB_DEFBUTTON2) != IDYES) return;
+    std::string removing = id;
+    if (!app.kbLibrary.remove(removing)) {
+        MessageBoxW(app.menuOwnerHwnd, (L"\u65E0\u6CD5\u5220\u9664 " + KeyboardSkinLibrary::directory() + L"\\" + utf8ToWide(removing) + L".kurokb").c_str(),
+                    L"\u5220\u9664\u5931\u8D25", MB_OK | MB_ICONWARNING | MB_TOPMOST);
+        return;
+    }
+    if (app.settings.customKeyboard == removing) { app.settings.customKeyboard.clear(); app.settings.saveToRegistry(); }
+    refreshDressingRoom(app);
+}
+
+namespace settings_ui {
+enum CtrlId : int {
+    ID_COAT_COMBO = 2001,
+    ID_BTN_DRESSING,
+    ID_EYE_COMBO,
+    ID_KB_COMBO,
+    ID_BTN_IMPORT_KB,
+    ID_SCALE_SCROLL,
+    ID_SCALE_VAL,
+    ID_ROT_SCROLL,
+    ID_ROT_VAL,
+    ID_BTN_ROT_ZERO,
+    ID_CHK_FLIP,
+    ID_CHK_OUTLINE,
+    ID_BTN_RESET_POS,
+    ID_CHK_ANGER,
+    ID_CHK_PET,
+    ID_CHK_BADGES,
+    ID_CHK_LEGENDS,
+    ID_CHK_MARQUEE,
+    ID_CHK_EASTER,
+    ID_TABLET_COMBO,
+    ID_CHK_TOPMOST,
+    ID_CHK_AUTOHIDE_FS,
+    ID_CHK_CLICKTHROUGH,
+    ID_CHK_AUTOSTART,
+    ID_CHK_RUN_ADMIN,
+    ID_BTN_RELAUNCH_ADMIN,
+    ID_OBS_COMBO,
+    ID_CHK_OBS_HIDE,
+    ID_LANG_COMBO,
+    ID_BTN_SKINS_DIR,
+    ID_BTN_KB_DIR,
+    ID_BTN_EDIT_MODE
+};
+
+bool isWindowsDarkMode() {
+    HKEY hKey = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+                      L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                      0, KEY_READ, &hKey) != ERROR_SUCCESS) return false;
+    DWORD val = 1, sz = sizeof(val);
+    bool dark = (RegQueryValueExW(hKey, L"AppsUseLightTheme", nullptr, nullptr, (LPBYTE)&val, &sz) == ERROR_SUCCESS && val == 0);
+    RegCloseKey(hKey);
+    return dark;
+}
+
+void applyDwmDarkTitleBar(HWND hwnd, bool dark) {
+    HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+    if (!dwm) return;
+    using Fn = HRESULT (WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+    auto fn = (Fn)GetProcAddress(dwm, "DwmSetWindowAttribute");
+    if (fn) {
+        BOOL v = dark ? TRUE : FALSE;
+        // 20 = DWMWA_USE_IMMERSIVE_DARK_MODE (Win10 2004+ / Win11); 19 = older Win10 1903/1909
+        if (FAILED(fn(hwnd, 20, &v, sizeof(v)))) fn(hwnd, 19, &v, sizeof(v));
+    }
+    FreeLibrary(dwm);
+}
+
+void rebuildCombosAndSync(AppState& app) {
+    HWND hwnd = app.settingsWnd;
+    if (!hwnd) return;
+    app.settingsUpdating = true;
+    bool en = app.settings.isEnglish;
+    auto tr = [&](const wchar_t* zh, const wchar_t* eng) -> const wchar_t* { return en ? eng : zh; };
+
+    // Coat / Skin combo (6 built-in + imported)
+    HWND coatCb = GetDlgItem(hwnd, ID_COAT_COMBO);
+    if (coatCb) {
+        SendMessageW(coatCb, CB_RESETCONTENT, 0, 0);
+        const wchar_t* builtins[6] = {
+            tr(L"\u7ECF\u5178\u5C0F\u9ED1\u732B", L"Classic Black Cat"),
+            tr(L"\u6316\u7164\u66B9\u7F57\u732B", L"Siamese Cat"),
+            tr(L"\u7F8E\u77ED\u94F6\u864E\u6591", L"Silver Tabby Shorthair"),
+            tr(L"\u6A58\u767D\u732B", L"Orange & White Cat"),
+            tr(L"\u5446\u732B", L"Dazed Cat"),
+            tr(L"\u72F8\u82B1\u732B", L"Tabby Cat")
+        };
+        for (int i = 0; i < 6; ++i) SendMessageW(coatCb, CB_ADDSTRING, 0, (LPARAM)builtins[i]);
+        int sel = (int)app.settings.coatTheme;
+        for (size_t i = 0; i < app.skins.skins.size(); ++i) {
+            SendMessageW(coatCb, CB_ADDSTRING, 0, (LPARAM)utf8ToWide(app.skins.skins[i].name).c_str());
+            if (!app.settings.customSkin.empty() && app.skins.skins[i].id == app.settings.customSkin) {
+                sel = 6 + (int)i;
+            }
+        }
+        SendMessageW(coatCb, CB_SETCURSEL, (WPARAM)sel, 0);
+    }
+
+    // Eye combo
+    HWND eyeCb = GetDlgItem(hwnd, ID_EYE_COMBO);
+    if (eyeCb) {
+        SendMessageW(eyeCb, CB_RESETCONTENT, 0, 0);
+        const wchar_t* eyes[7] = {
+            tr(L"\u8367\u5149\u9EC4\u7EFF", L"Neon Chartreuse"),
+            tr(L"\u66B9\u7F57\u5B9D\u77F3\u84DD", L"Siamese Ice Blue"),
+            tr(L"\u7425\u73C0\u91D1\u77B3", L"Warm Amber"),
+            tr(L"\u51B0\u6676\u6D45\u84DD", L"Ice Cyan"),
+            tr(L"\u67D4\u548C\u7425\u73C0", L"Soft Amber"),
+            tr(L"\u6DE1\u91D1\u9752\u7EFF", L"Golden Hazel"),
+            tr(L"\u6A44\u6984\u91D1", L"Olive Gold")
+        };
+        for (int i = 0; i < 7; ++i) SendMessageW(eyeCb, CB_ADDSTRING, 0, (LPARAM)eyes[i]);
+        SendMessageW(eyeCb, CB_SETCURSEL, (WPARAM)(int)app.settings.eyeTheme, 0);
+    }
+
+    // Keyboard combo (3 built-in + imported)
+    app.kbLibrary.reload();
+    HWND kbCb = GetDlgItem(hwnd, ID_KB_COMBO);
+    if (kbCb) {
+        SendMessageW(kbCb, CB_RESETCONTENT, 0, 0);
+        const wchar_t* kbs[3] = {
+            tr(L"\u7ECF\u5178\u5976\u767D\u6696\u9EC4", L"Classic Milk White"),
+            tr(L"\u6697\u591C\u6781\u5BA2\u9ED1", L"Midnight Hacker Black"),
+            tr(L"\u590D\u53E4\u5976\u6CB9\u7070", L"Retro Cream Gray")
+        };
+        for (int i = 0; i < 3; ++i) SendMessageW(kbCb, CB_ADDSTRING, 0, (LPARAM)kbs[i]);
+        int sel = (int)app.settings.keyboardTheme;
+        for (size_t i = 0; i < app.kbLibrary.skins.size(); ++i) {
+            SendMessageW(kbCb, CB_ADDSTRING, 0, (LPARAM)utf8ToWide(app.kbLibrary.skins[i].name).c_str());
+            if (!app.settings.customKeyboard.empty() && app.kbLibrary.skins[i].id == app.settings.customKeyboard) {
+                sel = 3 + (int)i;
+            }
+        }
+        SendMessageW(kbCb, CB_SETCURSEL, (WPARAM)sel, 0);
+    }
+
+    // Scale & Rotation scrollbars
+    int scalePct = std::clamp((int)std::lround(app.settings.scale * 100.0f), 45, 250);
+    SetScrollPos(GetDlgItem(hwnd, ID_SCALE_SCROLL), SB_CTL, scalePct, TRUE);
+    wchar_t sBuf[32] = {};
+    swprintf_s(sBuf, L"%d%%", scalePct);
+    SetWindowTextW(GetDlgItem(hwnd, ID_SCALE_VAL), sBuf);
+
+    int rotDeg = std::clamp((int)std::lround(app.settings.rotationDeg), -180, 180);
+    SetScrollPos(GetDlgItem(hwnd, ID_ROT_SCROLL), SB_CTL, rotDeg, TRUE);
+    wchar_t rBuf[32] = {};
+    swprintf_s(rBuf, L"%d\u00B0", rotDeg);
+    SetWindowTextW(GetDlgItem(hwnd, ID_ROT_VAL), rBuf);
+
+    auto setChk = [&](int id, bool v) {
+        SendMessageW(GetDlgItem(hwnd, id), BM_SETCHECK, v ? BST_CHECKED : BST_UNCHECKED, 0);
+    };
+    setChk(ID_CHK_FLIP, app.settings.flipHorizontal);
+    setChk(ID_CHK_OUTLINE, app.settings.whiteOutline);
+    setChk(ID_CHK_ANGER, app.settings.enableAnger);
+    setChk(ID_CHK_PET, app.settings.petInteraction);
+    setChk(ID_CHK_BADGES, app.settings.showKeyBadges);
+    setChk(ID_CHK_LEGENDS, app.settings.showKeyLegends);
+    setChk(ID_CHK_MARQUEE, app.settings.keyboardMarquee);
+    setChk(ID_CHK_EASTER, app.settings.footEasterEgg || app.settings.tailEasterEgg);
+    setChk(ID_CHK_TOPMOST, app.settings.alwaysOnTop);
+    setChk(ID_CHK_AUTOHIDE_FS, app.settings.autoHideFullscreen);
+    setChk(ID_CHK_CLICKTHROUGH, app.settings.fullClickThrough);
+    setChk(ID_CHK_AUTOSTART, isAutoStartEnabled());
+    setChk(ID_CHK_RUN_ADMIN, app.settings.runAsAdmin);
+    setChk(ID_CHK_OBS_HIDE, app.settings.obsHideDesktop);
+    EnableWindow(GetDlgItem(hwnd, ID_CHK_OBS_HIDE), app.settings.obsCaptureMode != 0);
+    EnableWindow(GetDlgItem(hwnd, ID_BTN_RELAUNCH_ADMIN), !app.isElevated);
+
+    SendMessageW(GetDlgItem(hwnd, ID_TABLET_COMBO), CB_SETCURSEL, (WPARAM)app.settings.tabletMode, 0);
+    SendMessageW(GetDlgItem(hwnd, ID_OBS_COMBO), CB_SETCURSEL, (WPARAM)app.settings.obsCaptureMode, 0);
+    SendMessageW(GetDlgItem(hwnd, ID_LANG_COMBO), CB_SETCURSEL, (WPARAM)(app.settings.isEnglish ? 1 : 0), 0);
+
+    app.settingsUpdating = false;
+}
+} // namespace settings_ui
+
+void showSettingsWindow(AppState& app);
+
+void refreshSettingsWindow(AppState& app) {
+    if (app.settingsWnd && IsWindow(app.settingsWnd)) {
+        settings_ui::rebuildCombosAndSync(app);
+    }
+}
+
+LRESULT CALLBACK settingsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    AppState* app = g_app;
+    switch (msg) {
+        case WM_ERASEBKGND:
+            if (app && app->settingsBgBrush) {
+                RECT rc = {};
+                GetClientRect(hwnd, &rc);
+                FillRect((HDC)wParam, &rc, app->settingsBgBrush);
+                return TRUE;
+            }
+            break;
+        case WM_CTLCOLORSTATIC:
+        case WM_CTLCOLORBTN:
+            if (app && app->settingsBgBrush) {
+                HDC hdc = (HDC)wParam;
+                SetBkMode(hdc, TRANSPARENT);
+                SetTextColor(hdc, app->settingsDark ? RGB(236, 238, 242) : RGB(28, 30, 34));
+                return (LRESULT)app->settingsBgBrush;
+            }
+            break;
+        case WM_HSCROLL: {
+            if (!app || app->settingsUpdating) return 0;
+            HWND sb = (HWND)lParam;
+            int id = GetDlgCtrlID(sb);
+            int cur = GetScrollPos(sb, SB_CTL);
+            int lo = 0, hi = 100;
+            GetScrollRange(sb, SB_CTL, &lo, &hi);
+            int stepSmall = (id == settings_ui::ID_ROT_SCROLL) ? 1 : 2;
+            int stepPage = (id == settings_ui::ID_ROT_SCROLL) ? 15 : 10;
+            switch (LOWORD(wParam)) {
+                case SB_LINELEFT: cur -= stepSmall; break;
+                case SB_LINERIGHT: cur += stepSmall; break;
+                case SB_PAGELEFT: cur -= stepPage; break;
+                case SB_PAGERIGHT: cur += stepPage; break;
+                case SB_THUMBTRACK:
+                case SB_THUMBPOSITION: cur = (short)HIWORD(wParam); break;
+                default: return 0;
+            }
+            cur = std::clamp(cur, lo, hi);
+            SetScrollPos(sb, SB_CTL, cur, TRUE);
+            if (id == settings_ui::ID_SCALE_SCROLL) {
+                app->settings.scale = (float)cur / 100.0f;
+                applyWindowScaleAndPosition(*app, true, true);
+                wchar_t buf[32] = {};
+                swprintf_s(buf, L"%d%%", cur);
+                SetWindowTextW(GetDlgItem(hwnd, settings_ui::ID_SCALE_VAL), buf);
+            } else if (id == settings_ui::ID_ROT_SCROLL) {
+                if (std::abs(cur) <= 3) cur = 0;
+                else if (std::abs(cur - 90) <= 3) cur = 90;
+                else if (std::abs(cur + 90) <= 3) cur = -90;
+                SetScrollPos(sb, SB_CTL, cur, TRUE);
+                app->settings.rotationDeg = (float)cur;
+                app->settings.saveToRegistry();
+                wchar_t buf[32] = {};
+                swprintf_s(buf, L"%d\u00B0", cur);
+                SetWindowTextW(GetDlgItem(hwnd, settings_ui::ID_ROT_VAL), buf);
+            }
+            return 0;
+        }
+        case WM_COMMAND: {
+            if (!app || app->settingsUpdating) return 0;
+            int id = LOWORD(wParam);
+            int code = HIWORD(wParam);
+            using namespace settings_ui;
+            if (code == CBN_SELCHANGE) {
+                int sel = (int)SendMessageW((HWND)lParam, CB_GETCURSEL, 0, 0);
+                if (sel < 0) return 0;
+                if (id == ID_COAT_COMBO) {
+                    if (sel < 6) {
+                        app->settings.customSkin.clear();
+                        app->settings.coatTheme = (CatCoatTheme)sel;
+                        switch (app->settings.coatTheme) {
+                            case CatCoatTheme::ClassicBlack: app->settings.eyeTheme = EyeColorTheme::NeonChartreuse; break;
+                            case CatCoatTheme::Siamese:      app->settings.eyeTheme = EyeColorTheme::SiameseBlue; break;
+                            case CatCoatTheme::Shorthair:    app->settings.eyeTheme = EyeColorTheme::ReferenceHazel; break;
+                            case CatCoatTheme::OrangeWhite:  app->settings.eyeTheme = EyeColorTheme::WarmAmber; break;
+                            case CatCoatTheme::Dazed:        app->settings.eyeTheme = EyeColorTheme::SoftAmber; break;
+                            case CatCoatTheme::Tabby:        app->settings.eyeTheme = EyeColorTheme::OliveGold; break;
+                        }
+                    } else if ((size_t)(sel - 6) < app->skins.skins.size()) {
+                        app->settings.customSkin = app->skins.skins[sel - 6].id;
+                    }
+                    app->settings.saveToRegistry();
+                    refreshDressingRoom(*app);
+                } else if (id == ID_EYE_COMBO && sel <= (int)EyeColorTheme::OliveGold) {
+                    app->settings.eyeTheme = (EyeColorTheme)sel;
+                    app->settings.saveToRegistry();
+                } else if (id == ID_KB_COMBO) {
+                    if (sel < 3) {
+                        app->settings.customKeyboard.clear();
+                        app->settings.keyboardTheme = (KeyboardTheme)sel;
+                    } else if ((size_t)(sel - 3) < app->kbLibrary.skins.size()) {
+                        app->settings.customKeyboard = app->kbLibrary.skins[sel - 3].id;
+                    }
+                    app->settings.saveToRegistry();
+                } else if (id == ID_TABLET_COMBO && sel <= 2) {
+                    app->settings.tabletMode = sel;
+                    app->settings.saveToRegistry();
+                } else if (id == ID_OBS_COMBO && sel <= 2) {
+                    app->settings.obsCaptureMode = sel;
+                    if (sel == 0) app->settings.obsHideDesktop = false;
+                    app->settings.saveToRegistry();
+                    applyOBSMode(*app);
+                    refreshSettingsWindow(*app);
+                } else if (id == ID_LANG_COMBO) {
+                    bool newEn = (sel == 1);
+                    if (newEn != app->settings.isEnglish) {
+                        app->settings.isEnglish = newEn;
+                        app->settings.saveToRegistry();
+                        DestroyWindow(hwnd);
+                        showSettingsWindow(*app);
+                    }
+                }
+                return 0;
+            }
+            if (code == BN_CLICKED) {
+                auto isChk = [&](int cid) { return SendMessageW(GetDlgItem(hwnd, cid), BM_GETCHECK, 0, 0) == BST_CHECKED; };
+                switch (id) {
+                    case ID_BTN_DRESSING: showDressingRoom(*app); break;
+                    case ID_BTN_IMPORT_KB: chooseKeyboardSkinFile(*app); break;
+                    case ID_BTN_ROT_ZERO:
+                        app->settings.rotationDeg = 0.0f;
+                        app->settings.saveToRegistry();
+                        refreshSettingsWindow(*app);
+                        break;
+                    case ID_BTN_RESET_POS:
+                        app->settings.scale = 1.0f;
+                        app->settings.rotationDeg = 0.0f;
+                        app->settings.flipHorizontal = false;
+                        app->settings.posX = -99999;
+                        app->settings.posY = -99999;
+                        applyWindowScaleAndPosition(*app, false, true);
+                        refreshSettingsWindow(*app);
+                        break;
+                    case ID_BTN_EDIT_MODE:
+                        app->settings.isEditMode = !app->settings.isEditMode;
+                        break;
+                    case ID_CHK_FLIP:
+                        app->settings.flipHorizontal = isChk(id);
+                        app->settings.saveToRegistry();
+                        break;
+                    case ID_CHK_OUTLINE:
+                        app->settings.whiteOutline = isChk(id);
+                        app->settings.saveToRegistry();
+                        break;
+                    case ID_CHK_ANGER:
+                        app->settings.enableAnger = isChk(id);
+                        app->settings.saveToRegistry();
+                        break;
+                    case ID_CHK_PET:
+                        app->settings.petInteraction = isChk(id);
+                        app->settings.saveToRegistry();
+                        break;
+                    case ID_CHK_BADGES:
+                        app->settings.showKeyBadges = isChk(id);
+                        app->settings.saveToRegistry();
+                        break;
+                    case ID_CHK_LEGENDS:
+                        app->settings.showKeyLegends = isChk(id);
+                        app->settings.saveToRegistry();
+                        break;
+                    case ID_CHK_MARQUEE:
+                        app->settings.keyboardMarquee = isChk(id);
+                        app->settings.saveToRegistry();
+                        break;
+                    case ID_CHK_EASTER: {
+                        bool on = isChk(id);
+                        app->settings.footEasterEgg = on;
+                        app->settings.tailEasterEgg = on;
+                        app->settings.saveToRegistry();
+                        break;
+                    }
+                    case ID_CHK_TOPMOST:
+                        app->settings.alwaysOnTop = isChk(id);
+                        applyWindowScaleAndPosition(*app, false, true);
+                        break;
+                    case ID_CHK_AUTOHIDE_FS:
+                        app->settings.autoHideFullscreen = isChk(id);
+                        app->settings.saveToRegistry();
+                        if (!app->settings.autoHideFullscreen && app->hiddenByFullscreen) {
+                            app->hiddenByFullscreen = false;
+                            if (app->isVisible) { ShowWindow(app->hwnd, SW_SHOWNOACTIVATE); assertTopmost(*app); }
+                        }
+                        app->nextHousekeepingTime = 0.0;
+                        break;
+                    case ID_CHK_CLICKTHROUGH:
+                        app->settings.fullClickThrough = isChk(id);
+                        app->settings.saveToRegistry();
+                        if (app->settings.fullClickThrough) {
+                            showTrayBalloon(*app,
+                                L"KuroCat \u5DF2\u5F00\u542F\u5B8C\u5168\u9F20\u6807\u7A7F\u900F",
+                                L"\u53D6\u6D88\u65B9\u5F0F\uFF1A\u6309 Ctrl+Alt+Shift+P\uFF0C\u6216\u6309\u4F4F Alt \u952E\u53F3\u952E\u5C0F\u732B\uFF0C\u6216\u70B9\u53F3\u4E0B\u89D2\u6258\u76D8\u56FE\u6807");
+                        }
+                        break;
+                    case ID_CHK_AUTOSTART:
+                        setAutoStartEnabled(isChk(id));
+                        break;
+                    case ID_CHK_RUN_ADMIN:
+                        app->settings.runAsAdmin = isChk(id);
+                        app->settings.saveToRegistry();
+                        if (app->settings.runAsAdmin && !app->isElevated && relaunchSelfElevated(L"--takeover --no-elevate")) {
+                            quitApp(*app);
+                        }
+                        break;
+                    case ID_BTN_RELAUNCH_ADMIN:
+                        if (!app->isElevated && relaunchSelfElevated(L"--takeover --no-elevate")) quitApp(*app);
+                        break;
+                    case ID_CHK_OBS_HIDE:
+                        app->settings.obsHideDesktop = isChk(id);
+                        app->settings.saveToRegistry();
+                        applyOBSMode(*app);
+                        break;
+                    case ID_BTN_SKINS_DIR:
+                        SkinLibrary::ensureDir();
+                        ShellExecuteW(nullptr, L"open", SkinLibrary::dir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                        break;
+                    case ID_BTN_KB_DIR:
+                        KeyboardSkinLibrary::ensureDir();
+                        ShellExecuteW(nullptr, L"open", KeyboardSkinLibrary::directory().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                        break;
+                }
+            }
+            return 0;
+        }
+        case WM_CLOSE:
+            DestroyWindow(hwnd);
+            return 0;
+        case WM_DESTROY:
+            if (app && app->settingsWnd == hwnd) {
+                app->settingsWnd = nullptr;
+                if (app->settingsFont) { DeleteObject(app->settingsFont); app->settingsFont = nullptr; }
+                if (app->settingsBoldFont) { DeleteObject(app->settingsBoldFont); app->settingsBoldFont = nullptr; }
+                if (app->settingsBgBrush) { DeleteObject(app->settingsBgBrush); app->settingsBgBrush = nullptr; }
+            }
+            return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+void showSettingsWindow(AppState& app) {
+    if (app.settingsWnd && IsWindow(app.settingsWnd)) {
+        refreshSettingsWindow(app);
+        ShowWindow(app.settingsWnd, SW_SHOWNORMAL);
+        SetForegroundWindow(app.settingsWnd);
+        return;
+    }
+    HINSTANCE inst = GetModuleHandleW(nullptr);
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSEXW wc = {};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = settingsWndProc;
+        wc.hInstance = inst;
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+        wc.lpszClassName = SETTINGS_WINDOW_CLASS;
+        registered = RegisterClassExW(&wc) != 0;
+    }
+
+    HDC screen = GetDC(nullptr);
+    float k = GetDeviceCaps(screen, LOGPIXELSY) / 96.0f;
+    ReleaseDC(nullptr, screen);
+    auto px = [&](int v) { return (int)std::lround(v * k); };
+
+    app.settingsDark = settings_ui::isWindowsDarkMode();
+    app.settingsBgBrush = CreateSolidBrush(app.settingsDark ? RGB(32, 32, 36) : RGB(246, 246, 248));
+    app.settingsFont = CreateFontW(-px(13), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+    app.settingsBoldFont = CreateFontW(-px(13), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+
+    bool en = app.settings.isEnglish;
+    auto tr = [&](const wchar_t* zh, const wchar_t* eng) -> const wchar_t* { return en ? eng : zh; };
+
+    const int W = 540, H = 618;
+    const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
+    RECT rc = { 0, 0, px(W), px(H) };
+    AdjustWindowRectEx(&rc, style, FALSE, 0);
+    int winW = rc.right - rc.left, winH = rc.bottom - rc.top;
+    RECT work = {};
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+    HWND win = CreateWindowExW(0, SETTINGS_WINDOW_CLASS,
+        tr(L"KuroCat \u8BBE\u7F6E", L"KuroCat Settings"), style,
+        (work.left + work.right - winW) / 2, (work.top + work.bottom - winH) / 2,
+        winW, winH, nullptr, nullptr, inst, nullptr);
+    if (!win) return;
+    app.settingsWnd = win;
+    settings_ui::applyDwmDarkTitleBar(win, app.settingsDark);
+
+    auto addCtrl = [&](const wchar_t* cls, const wchar_t* txt, DWORD st, int x, int y, int w, int h, int id, bool bold = false) -> HWND {
+        HWND c = CreateWindowExW(0, cls, txt, WS_CHILD | WS_VISIBLE | st,
+            px(x), px(y), px(w), px(h), win, (HMENU)(INT_PTR)id, inst, nullptr);
+        if (c) SendMessageW(c, WM_SETFONT, (WPARAM)(bold ? app.settingsBoldFont : app.settingsFont), TRUE);
+        return c;
+    };
+
+    using namespace settings_ui;
+    // Section 1: Appearance & Orientation
+    addCtrl(L"BUTTON", tr(L"\u5916\u89C2\u4E0E\u65B9\u5411", L"Appearance & Orientation"), BS_GROUPBOX, 14, 10, 512, 232, 0, true);
+
+    addCtrl(L"STATIC", tr(L"\u732B\u54AA\u76AE\u80A4", L"Cat Skin"), SS_LEFT, 28, 38, 76, 20, 0);
+    addCtrl(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, 110, 34, 290, 220, ID_COAT_COMBO);
+    addCtrl(L"BUTTON", tr(L"\u6362\u88C5\u95F4\u2026", L"Wardrobe..."), BS_PUSHBUTTON | WS_TABSTOP, 410, 34, 102, 24, ID_BTN_DRESSING);
+
+    addCtrl(L"STATIC", tr(L"\u77B3\u8272\u5207\u6362", L"Eye Color"), SS_LEFT, 28, 70, 76, 20, 0);
+    addCtrl(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, 110, 66, 290, 220, ID_EYE_COMBO);
+    addCtrl(L"BUTTON", tr(L"\u6846\u9009\u8C03\u6574", L"Edit Box"), BS_PUSHBUTTON | WS_TABSTOP, 410, 66, 102, 24, ID_BTN_EDIT_MODE);
+
+    addCtrl(L"STATIC", tr(L"\u952E\u76D8\u914D\u8272", L"Keyboard"), SS_LEFT, 28, 102, 76, 20, 0);
+    addCtrl(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, 110, 98, 290, 220, ID_KB_COMBO);
+    addCtrl(L"BUTTON", tr(L"\u5BFC\u5165\u952E\u76D8\u2026", L"Import..."), BS_PUSHBUTTON | WS_TABSTOP, 410, 98, 102, 24, ID_BTN_IMPORT_KB);
+
+    addCtrl(L"STATIC", tr(L"\u7F29\u653E\u5927\u5C0F", L"Pet Scale"), SS_LEFT, 28, 136, 76, 20, 0);
+    HWND scaleSb = addCtrl(L"SCROLLBAR", L"", SBS_HORZ | WS_TABSTOP, 110, 136, 290, 18, ID_SCALE_SCROLL);
+    SetScrollRange(scaleSb, SB_CTL, 45, 250, FALSE);
+    addCtrl(L"STATIC", L"100%", SS_RIGHT, 410, 136, 48, 20, ID_SCALE_VAL);
+
+    addCtrl(L"STATIC", tr(L"\u671D\u5411\u89D2\u5EA6", L"Rotation"), SS_LEFT, 28, 168, 76, 20, 0);
+    HWND rotSb = addCtrl(L"SCROLLBAR", L"", SBS_HORZ | WS_TABSTOP, 110, 168, 290, 18, ID_ROT_SCROLL);
+    SetScrollRange(rotSb, SB_CTL, -180, 180, FALSE);
+    addCtrl(L"STATIC", L"0\u00B0", SS_RIGHT, 408, 168, 42, 20, ID_ROT_VAL);
+    addCtrl(L"BUTTON", tr(L"\u5F52\u96F6", L"0\u00B0"), BS_PUSHBUTTON | WS_TABSTOP, 458, 164, 54, 24, ID_BTN_ROT_ZERO);
+
+    addCtrl(L"BUTTON", tr(L"\u6C34\u5E73\u7FFB\u8F6C", L"Flip Horizontal"), BS_AUTOCHECKBOX | WS_TABSTOP, 28, 202, 140, 22, ID_CHK_FLIP);
+    addCtrl(L"BUTTON", tr(L"\u767D\u8272\u8D34\u7EB8\u63CF\u8FB9", L"White Sticker Outline"), BS_AUTOCHECKBOX | WS_TABSTOP, 180, 202, 180, 22, ID_CHK_OUTLINE);
+    addCtrl(L"BUTTON", tr(L"\u91CD\u7F6E\u4F4D\u7F6E\u4E0E\u671D\u5411", L"Reset Pose"), BS_PUSHBUTTON | WS_TABSTOP, 384, 200, 128, 24, ID_BTN_RESET_POS);
+
+    // Section 2: Interaction & Effects
+    addCtrl(L"BUTTON", tr(L"\u4E92\u52A8\u4E0E\u7279\u6548", L"Interaction & Effects"), BS_GROUPBOX, 14, 252, 512, 148, 0, true);
+    addCtrl(L"BUTTON", tr(L"\u9AD8\u901F\u6253\u5B57\u751F\u6C14\u8868\u60C5", L"Angry Expression on Fast Typing"), BS_AUTOCHECKBOX | WS_TABSTOP, 28, 278, 236, 22, ID_CHK_ANGER);
+    addCtrl(L"BUTTON", tr(L"\u6478\u732B\u4E92\u52A8\u4E0E\u5495\u565C\u7279\u6548", L"Petting & Purr Sparkles"), BS_AUTOCHECKBOX | WS_TABSTOP, 276, 278, 236, 22, ID_CHK_PET);
+    addCtrl(L"BUTTON", tr(L"\u663E\u793A\u6309\u952E\u6C14\u6CE1", L"Show Key & Click Badges"), BS_AUTOCHECKBOX | WS_TABSTOP, 28, 306, 236, 22, ID_CHK_BADGES);
+    addCtrl(L"BUTTON", tr(L"\u663E\u793A\u952E\u76D8\u5B57\u7B26", L"Show Keycap Legends"), BS_AUTOCHECKBOX | WS_TABSTOP, 276, 306, 236, 22, ID_CHK_LEGENDS);
+    addCtrl(L"BUTTON", tr(L"\u952E\u76D8\u8DD1\u9A6C\u706F\u6D41\u5149", L"Keyboard RGB Marquee"), BS_AUTOCHECKBOX | WS_TABSTOP, 28, 334, 236, 22, ID_CHK_MARQUEE);
+    addCtrl(L"BUTTON", tr(L"\u8E29\u952E\u4E0E\u7529\u5C3E\u5F69\u86CB", L"Hind-Foot & Tail Easter Eggs"), BS_AUTOCHECKBOX | WS_TABSTOP, 276, 334, 236, 22, ID_CHK_EASTER);
+
+    addCtrl(L"STATIC", tr(L"\u6570\u4F4D\u677F\u6A21\u5F0F", L"Tablet Mode"), SS_LEFT, 28, 366, 90, 20, 0);
+    HWND tabCb = addCtrl(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, 124, 362, 388, 120, ID_TABLET_COMBO);
+    SendMessageW(tabCb, CB_ADDSTRING, 0, (LPARAM)tr(L"\u81EA\u52A8\u68C0\u6D4B\uFF08\u8FDE\u63A5\u6570\u4F4D\u677F\u65F6\u81EA\u52A8\u5207\u6362\uFF09", L"Auto-Detect (Switch When Connected)"));
+    SendMessageW(tabCb, CB_ADDSTRING, 0, (LPARAM)tr(L"\u59CB\u7EC8\u663E\u793A\u6570\u4F4D\u677F\u4E0E\u89E6\u63A7\u7B14", L"Always Show Tablet & Stylus"));
+    SendMessageW(tabCb, CB_ADDSTRING, 0, (LPARAM)tr(L"\u59CB\u7EC8\u663E\u793A\u9F20\u6807", L"Always Show Mouse"));
+
+    // Section 3: Window & System
+    addCtrl(L"BUTTON", tr(L"\u7A97\u53E3\u4E0E\u7CFB\u7EDF", L"Window & System"), BS_GROUPBOX, 14, 410, 512, 194, 0, true);
+    addCtrl(L"BUTTON", tr(L"\u7A97\u53E3\u7F6E\u9876\u663E\u793A", L"Always On Top"), BS_AUTOCHECKBOX | WS_TABSTOP, 28, 436, 236, 22, ID_CHK_TOPMOST);
+    addCtrl(L"BUTTON", tr(L"\u5168\u5C4F\u5E94\u7528\u65F6\u81EA\u52A8\u9690\u85CF", L"Auto-Hide in Fullscreen"), BS_AUTOCHECKBOX | WS_TABSTOP, 276, 436, 236, 22, ID_CHK_AUTOHIDE_FS);
+    addCtrl(L"BUTTON", tr(L"\u5B8C\u5168\u9F20\u6807\u7A7F\u900F (Alt \u4E34\u65F6\u89E3\u9501)", L"Full Click-Through (Hold Alt)"), BS_AUTOCHECKBOX | WS_TABSTOP, 28, 464, 236, 22, ID_CHK_CLICKTHROUGH);
+    addCtrl(L"BUTTON", tr(L"\u5F00\u673A\u81EA\u52A8\u542F\u52A8", L"Launch at Startup"), BS_AUTOCHECKBOX | WS_TABSTOP, 276, 464, 236, 22, ID_CHK_AUTOSTART);
+    addCtrl(L"BUTTON", tr(L"\u59CB\u7EC8\u4EE5\u7BA1\u7406\u5458\u8EAB\u4EFD\u8FD0\u884C", L"Always Run as Administrator"), BS_AUTOCHECKBOX | WS_TABSTOP, 28, 492, 236, 22, ID_CHK_RUN_ADMIN);
+    addCtrl(L"BUTTON", app.isElevated ? tr(L"\u2713 \u5DF2\u7BA1\u7406\u5458\u8FD0\u884C", L"\u2713 Running as Admin")
+                                      : tr(L"\u7BA1\u7406\u5458\u8EAB\u4EFD\u91CD\u542F", L"Restart as Admin"),
+            BS_PUSHBUTTON | WS_TABSTOP, 276, 490, 148, 24, ID_BTN_RELAUNCH_ADMIN);
+
+    addCtrl(L"STATIC", tr(L"OBS \u76F4\u64AD", L"OBS Capture"), SS_LEFT, 28, 526, 78, 20, 0);
+    HWND obsCb = addCtrl(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, 110, 522, 210, 120, ID_OBS_COMBO);
+    SendMessageW(obsCb, CB_ADDSTRING, 0, (LPARAM)tr(L"\u5173\u95ED\uFF08\u6B63\u5E38\u60AC\u6D6E\uFF09", L"Off (Normal Overlay)"));
+    SendMessageW(obsCb, CB_ADDSTRING, 0, (LPARAM)tr(L"OBS \u900F\u660E\u7A97\u53E3\u6355\u83B7", L"OBS Transparent Window"));
+    SendMessageW(obsCb, CB_ADDSTRING, 0, (LPARAM)tr(L"OBS \u7EFF\u5E55 (#00FF00)", L"OBS Green Screen"));
+    addCtrl(L"BUTTON", tr(L"\u540E\u53F0\u6355\u83B7\uFF08\u9690\u85CF\u684C\u9762\uFF09", L"Hide on Desktop"), BS_AUTOCHECKBOX | WS_TABSTOP, 332, 524, 180, 22, ID_CHK_OBS_HIDE);
+
+    addCtrl(L"STATIC", tr(L"\u754C\u9762\u8BED\u8A00", L"Language"), SS_LEFT, 28, 560, 78, 20, 0);
+    HWND langCb = addCtrl(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, 110, 556, 150, 90, ID_LANG_COMBO);
+    SendMessageW(langCb, CB_ADDSTRING, 0, (LPARAM)L"\u7B80\u4F53\u4E2D\u6587");
+    SendMessageW(langCb, CB_ADDSTRING, 0, (LPARAM)L"English");
+    addCtrl(L"BUTTON", tr(L"\u76AE\u80A4\u76EE\u5F55", L"Skins Dir"), BS_PUSHBUTTON | WS_TABSTOP, 290, 556, 106, 24, ID_BTN_SKINS_DIR);
+    addCtrl(L"BUTTON", tr(L"\u952E\u76D8\u76EE\u5F55", L"Keyboards Dir"), BS_PUSHBUTTON | WS_TABSTOP, 406, 556, 106, 24, ID_BTN_KB_DIR);
+
+    settings_ui::rebuildCombosAndSync(app);
+    ShowWindow(win, SW_SHOWNORMAL);
+    SetForegroundWindow(win);
+}
+
 void showContextMenu(AppState& app, POINT screenPt) {
     HMENU menu = CreatePopupMenu();
     bool en = app.settings.isEnglish;
@@ -956,14 +1625,14 @@ void showContextMenu(AppState& app, POINT screenPt) {
 
     // Status & live stats header
     std::wstring statusStr = app.input.isRawInputRegistered
-        ? tr(L"\u25CF \u786C\u4EF6\u7EA7\u5168\u72B6\u6001\u76D1\u542C\u4E2D (Raw Input \u6E38\u620F/\u6253\u5B57)",
+        ? tr(L"\u25CF \u786C\u4EF6\u7EA7\u5168\u72B6\u6001\u76D1\u542C\u4E2D (Raw Input)",
              L"\u25CF Hardware Input Active (Raw Input)")
         : tr(L"\u26A0 Raw Input \u672A\u542F\u52A8", L"\u26A0 Raw Input Inactive");
     AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, statusStr.c_str());
     if (!app.isElevated && app.lastBlockedForegroundTime > 0.0 && nowSeconds() - app.lastBlockedForegroundTime < 600.0) {
-        AppendMenuW(menu, MF_STRING | MF_GRAYED, 0,
-            tr(L"\u26A0 \u521A\u624D\u7684\u5E94\u7528\uFF08\u5982 WPS / \u6E38\u620F\uFF09\u4EE5\u7BA1\u7406\u5458\u6743\u9650\u8FD0\u884C\uFF0C\u952E\u76D8\u88AB Windows \u62E6\u622A\u4E86",
-               L"\u26A0 Foreground admin app (e.g. WPS / game) blocked keyboard input"));
+        AppendMenuW(menu, MF_STRING, CMD_RELAUNCH_ADMIN,
+            tr(L"\u26A0 \u68C0\u6D4B\u5230\u7BA1\u7406\u5458\u7A97\u53E3\u62E6\u622A\u952E\u76D8\uFF0C\u70B9\u6B64\u7BA1\u7406\u5458\u91CD\u542F",
+               L"\u26A0 Admin app blocked keys — Restart as Administrator"));
     }
 
     std::wstring stats = en
@@ -976,49 +1645,14 @@ void showContextMenu(AppState& app, POINT screenPt) {
     AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, stats.c_str());
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
+    // Essential quick actions
     AppendMenuW(menu, MF_STRING, CMD_TOGGLE_VISIBLE, app.isVisible ? tr(L"\u9690\u85CF\u684C\u5BA0", L"Hide Pet") : tr(L"\u663E\u793A\u684C\u5BA0", L"Show Pet"));
-    AppendMenuW(menu, MF_STRING | (app.settings.fullClickThrough ? MF_CHECKED : 0), CMD_TOGGLE_CLICKTHROUGH,
-        tr(L"\u5B8C\u5168\u9F20\u6807\u7A7F\u900F (Ctrl+Alt+Shift+P / \u6309\u4F4FAlt\u53EF\u53F3\u952E)",
-           L"Full Click-Through (Ctrl+Alt+Shift+P / Hold Alt)"));
-    AppendMenuW(menu, MF_STRING | (app.settings.alwaysOnTop ? MF_CHECKED : 0), CMD_TOGGLE_TOPMOST, tr(L"\u7A97\u53E3\u7F6E\u9876\u663E\u793A", L"Always On Top"));
-    AppendMenuW(menu, MF_STRING | (app.settings.autoHideFullscreen ? MF_CHECKED : 0), CMD_TOGGLE_AUTOHIDE_FS,
-        tr(L"\u5168\u5C4F\u5E94\u7528\u65F6\u81EA\u52A8\u9690\u85CF\uFF08PPT / \u89C6\u9891 / \u6E38\u620F\uFF09",
-           L"Auto-Hide in Fullscreen Apps (PPT / Video / Games)"));
-    AppendMenuW(menu, MF_STRING | (isAutoStartEnabled() ? MF_CHECKED : 0), CMD_TOGGLE_AUTOSTART, tr(L"\u5F00\u673A\u81EA\u52A8\u542F\u52A8", L"Launch at Startup"));
-    if (app.isElevated) {
-        AppendMenuW(menu, MF_STRING | MF_GRAYED, 0,
-            tr(L"\u2713 \u5DF2\u4EE5\u7BA1\u7406\u5458\u8EAB\u4EFD\u8FD0\u884C\uFF08WPS / \u7BA1\u7406\u5458\u6743\u9650\u6E38\u620F\u7684\u952E\u76D8\u90FD\u80FD\u76D1\u542C\uFF09",
-               L"\u2713 Running as Administrator (captures keys in WPS / admin games)"));
-    } else {
-        AppendMenuW(menu, MF_STRING, CMD_RELAUNCH_ADMIN,
-            tr(L"\u4EE5\u7BA1\u7406\u5458\u8EAB\u4EFD\u91CD\u65B0\u542F\u52A8\uFF08WPS / \u6E38\u620F\u91CC\u952E\u76D8\u6CA1\u53CD\u5E94\u65F6\u70B9\u8FD9\u91CC\uFF09",
-               L"Restart as Administrator (fix no keyboard input in WPS / games)"));
-    }
-    AppendMenuW(menu, MF_STRING | (app.settings.runAsAdmin ? MF_CHECKED : 0), CMD_TOGGLE_RUN_AS_ADMIN, tr(L"\u6BCF\u6B21\u542F\u52A8\u90FD\u4EE5\u7BA1\u7406\u5458\u8EAB\u4EFD\u8FD0\u884C", L"Always Run as Administrator"));
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-
-    AppendMenuW(menu, MF_STRING | (app.settings.showKeyBadges ? MF_CHECKED : 0), CMD_TOGGLE_BADGES, tr(L"\u663E\u793A\u6309\u952E\u6C14\u6CE1 ([S] [W] [\u21E7])", L"Show Key & Click Badges"));
-    AppendMenuW(menu, MF_STRING | (app.settings.showKeyLegends ? MF_CHECKED : 0), CMD_TOGGLE_KEY_LEGENDS, tr(L"\u663E\u793A\u952E\u76D8\u5B57\u7B26", L"Show Keycap Legends"));
-    AppendMenuW(menu, MF_STRING | (app.settings.keyboardMarquee ? MF_CHECKED : 0), CMD_TOGGLE_MARQUEE, tr(L"\u952E\u76D8\u8DD1\u9A6C\u706F\u6D41\u5149", L"Keyboard RGB Marquee"));
-
-    // OBS Live Capture Mode submenu
-    HMENU obsMenu = CreatePopupMenu();
-    AppendMenuW(obsMenu, MF_STRING | (app.settings.obsCaptureMode == 0 ? MF_CHECKED : 0), CMD_OBS_OFF, tr(L"\u5173\u95ED\uFF08\u6B63\u5E38\u684C\u9762\u60AC\u6D6E\uFF09", L"Off (Normal Overlay)"));
-    AppendMenuW(obsMenu, MF_STRING | (app.settings.obsCaptureMode == 1 ? MF_CHECKED : 0), CMD_OBS_TRANSPARENT, tr(L"OBS \u900F\u660E\u7A97\u53E3\u6355\u83B7", L"OBS Transparent Window Capture"));
-    AppendMenuW(obsMenu, MF_STRING | (app.settings.obsCaptureMode == 2 ? MF_CHECKED : 0), CMD_OBS_GREENSCREEN, tr(L"OBS \u7EFF\u5E55\u6A21\u5F0F (#00FF00)", L"OBS Green Screen (#00FF00)"));
-    AppendMenuW(obsMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(obsMenu, MF_STRING | (app.settings.obsHideDesktop ? MF_CHECKED : 0) | (app.settings.obsCaptureMode == 0 ? MF_GRAYED : 0),
-        CMD_TOGGLE_OBS_HIDE, tr(L"\u540E\u53F0\u6355\u83B7\uFF08\u9690\u85CF\u684C\u9762\u5C0F\u732B\uFF0COBS\u4ECD\u6B63\u5E38\u6355\u83B7\uFF09", L"Background Capture (Hide on Desktop)"));
-    AppendMenuW(menu, MF_POPUP, (UINT_PTR)obsMenu, tr(L"\U0001F4FA \u76F4\u64AD\u6355\u83B7\u6A21\u5F0F (OBS)", L"\U0001F4FA OBS Live Capture Mode"));
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-
-    // Interactive resize & flip mode (replaces static scale submenu; also triggered by double-clicking cat)
     AppendMenuW(menu, MF_STRING | (app.settings.isEditMode ? MF_CHECKED : 0), CMD_TOGGLE_EDIT,
         app.settings.isEditMode
-            ? tr(L"\u2713 \u5B8C\u6210\u8C03\u6574\u5927\u5C0F\u4E0E\u65B9\u5411", L"\u2713 Finish Resize & Flip")
-            : tr(L"\u8C03\u6574\u5927\u5C0F\u4E0E\u65B9\u5411 (\u53CC\u51FB\u5C0F\u732B)", L"Resize & Flip (Double-Click Cat)"));
+            ? tr(L"\u2713 \u5B8C\u6210\u8C03\u6574\u5927\u5C0F\u4E0E\u65B9\u5411", L"\u2713 Finish Resize & Direction")
+            : tr(L"\u8C03\u6574\u5927\u5C0F\u4E0E\u65B9\u5411 (\u53CC\u51FB\u5C0F\u732B)", L"Resize & Direction (Double-Click Cat)"));
 
-    // Cat Coat Skin submenu
+    // Quick Cat Skin switcher
     HMENU coatMenu = CreatePopupMenu();
     bool customActive = app.skins.find(app.settings.customSkin) != nullptr;
     auto coatCheck = [&](CatCoatTheme c) -> UINT { return !customActive && app.settings.coatTheme == c ? MF_CHECKED : 0; };
@@ -1035,46 +1669,11 @@ void showContextMenu(AppState& app, POINT screenPt) {
         AppendMenuW(coatMenu, MF_STRING | (app.settings.customSkin == s.id ? MF_CHECKED : 0), CMD_SKIN_SELECT_BASE + (UINT)i, utf8ToWide(s.name).c_str());
     }
     AppendMenuW(coatMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(coatMenu, MF_STRING, CMD_IMPORT_SKIN, tr(L"\u5BFC\u5165\u76AE\u80A4\u2026", L"Import Skin..."));
-    AppendMenuW(coatMenu, MF_STRING, CMD_OPEN_WORKSHOP, tr(L"\u6253\u5F00\u76AE\u80A4\u5DE5\u574A\uFF08\u5236\u4F5C\u76AE\u80A4\uFF09\u2026", L"Open Skin Workshop..."));
-    AppendMenuW(coatMenu, MF_STRING, CMD_OPEN_SKINS_DIR, tr(L"\u6253\u5F00\u76AE\u80A4\u6587\u4EF6\u5939\uFF08\u5907\u4EFD\uFF09", L"Open Skins Folder (Backup)"));
-    if (listed) {
-        HMENU deleteMenu = CreatePopupMenu();
-        for (size_t i = 0; i < listed; ++i) AppendMenuW(deleteMenu, MF_STRING, CMD_SKIN_DELETE_BASE + (UINT)i, utf8ToWide(app.skins.skins[i].name).c_str());
-        AppendMenuW(coatMenu, MF_POPUP, (UINT_PTR)deleteMenu, tr(L"\u5220\u9664\u76AE\u80A4", L"Delete Skin"));
-    }
-    AppendMenuW(menu, MF_POPUP, (UINT_PTR)coatMenu, tr(L"\u732B\u54AA\u76AE\u80A4", L"Cat Skin"));
+    AppendMenuW(coatMenu, MF_STRING, CMD_IMPORT_SKIN, tr(L"\u5BFC\u5165\u76AE\u80A4 / \u6362\u88C5\u95F4\u2026", L"Import Skin / Wardrobe..."));
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)coatMenu, tr(L"\u732B\u54AA\u76AE\u80A4 \U0001F431", L"Cat Skin \U0001F431"));
 
-    // Keyboard Theme submenu
-    HMENU kbMenu = CreatePopupMenu();
-    AppendMenuW(kbMenu, MF_STRING | (app.settings.keyboardTheme == KeyboardTheme::ClassicMilk ? MF_CHECKED : 0), CMD_KB_MILK, tr(L"\u7ECF\u5178\u5976\u767D\u6696\u9EC4 (\u539F\u7248)", L"Classic Milk White"));
-    AppendMenuW(kbMenu, MF_STRING | (app.settings.keyboardTheme == KeyboardTheme::MidnightHacker ? MF_CHECKED : 0), CMD_KB_HACKER, tr(L"\u6697\u591C\u6781\u5BA2\u9ED1", L"Midnight Hacker Black"));
-    AppendMenuW(kbMenu, MF_STRING | (app.settings.keyboardTheme == KeyboardTheme::RetroCream ? MF_CHECKED : 0), CMD_KB_RETRO, tr(L"\u590D\u53E4\u5976\u6CB9\u7070", L"Retro Cream Gray"));
-    AppendMenuW(menu, MF_POPUP, (UINT_PTR)kbMenu, tr(L"\u952E\u76D8\u914D\u8272", L"Keyboard Theme"));
-
-    // Eye Color submenu
-    HMENU eyeMenu = CreatePopupMenu();
-    AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::NeonChartreuse ? MF_CHECKED : 0), CMD_EYE_LIME, tr(L"\u7ECF\u5178\u8367\u5149\u9EC4\u7EFF (\u539F\u7248)", L"Neon Chartreuse"));
-    AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::SiameseBlue ? MF_CHECKED : 0), CMD_EYE_BLUE, tr(L"\u66B9\u7F57\u5B9D\u77F3\u84DD", L"Siamese Ice Blue"));
-    AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::WarmAmber ? MF_CHECKED : 0), CMD_EYE_AMBER, tr(L"\u7425\u73C0\u91D1\u77B3", L"Warm Amber"));
-    AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::IceCyan ? MF_CHECKED : 0), CMD_EYE_CYAN, tr(L"\u51B0\u6676\u6D45\u84DD", L"Ice Cyan"));
-    AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::SoftAmber ? MF_CHECKED : 0), CMD_EYE_SOFT_AMBER, tr(L"\u67D4\u548C\u7425\u73C0", L"Soft Amber"));
-    AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::ReferenceHazel ? MF_CHECKED : 0), CMD_EYE_REFERENCE_HAZEL, tr(L"\u6DE1\u91D1\u9752\u7EFF", L"Golden Hazel"));
-    AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::OliveGold ? MF_CHECKED : 0), CMD_EYE_OLIVE_GOLD, tr(L"\u6A44\u6984\u91D1", L"Olive Gold"));
-    AppendMenuW(menu, MF_POPUP, (UINT_PTR)eyeMenu, tr(L"\u77B3\u8272\u5207\u6362", L"Eye Color"));
-
-    // Drawing Tablet & Stylus submenu
-    HMENU tabMenu = CreatePopupMenu();
-    AppendMenuW(tabMenu, MF_STRING | (app.settings.tabletMode == 0 ? MF_CHECKED : 0), CMD_TABLET_AUTO, tr(L"\u81EA\u52A8\u68C0\u6D4B\uFF08\u8FDE\u63A5\u6570\u4F4D\u677F\u65F6\u81EA\u52A8\u5207\u6362\uFF09", L"Auto-Detect (Switch When Connected)"));
-    AppendMenuW(tabMenu, MF_STRING | (app.settings.tabletMode == 1 ? MF_CHECKED : 0), CMD_TABLET_ON,   tr(L"\u59CB\u7EC8\u663E\u793A\u6570\u4F4D\u677F\u4E0E\u89E6\u63A7\u7B14", L"Always Show Tablet & Stylus"));
-    AppendMenuW(tabMenu, MF_STRING | (app.settings.tabletMode == 2 ? MF_CHECKED : 0), CMD_TABLET_OFF,  tr(L"\u59CB\u7EC8\u663E\u793A\u9F20\u6807", L"Always Show Mouse"));
-    AppendMenuW(menu, MF_POPUP, (UINT_PTR)tabMenu, tr(L"\U0001F3A8 \u6570\u4F4D\u677F\u4E0E\u89E6\u63A7\u7B14", L"\U0001F3A8 Drawing Tablet & Stylus"));
-
-    // Language submenu
-    HMENU langMenu = CreatePopupMenu();
-    AppendMenuW(langMenu, MF_STRING | (!app.settings.isEnglish ? MF_CHECKED : 0), CMD_LANG_ZH, L"\u7B80\u4F53\u4E2D\u6587");
-    AppendMenuW(langMenu, MF_STRING | (app.settings.isEnglish ? MF_CHECKED : 0), CMD_LANG_EN, L"English");
-    AppendMenuW(menu, MF_POPUP, (UINT_PTR)langMenu, L"\U0001F310 \u8BED\u8A00 / Language");
+    // Unified Settings window
+    AppendMenuW(menu, MF_STRING, CMD_OPEN_SETTINGS, tr(L"\u2699\uFE0F \u8BBE\u7F6E\u2026", L"\u2699\uFE0F Settings..."));
 
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -1202,6 +1801,16 @@ void showContextMenu(AppState& app, POINT screenPt) {
             SkinLibrary::ensureDir();
             ShellExecuteW(nullptr, L"open", SkinLibrary::dir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             break;
+        case CMD_IMPORT_KB:
+            chooseKeyboardSkinFile(app);
+            break;
+        case CMD_OPEN_KB_PLAZA:
+            ShellExecuteW(nullptr, L"open", L"https://chanke17.github.io/KuroCat-Workshop/#keyboards", nullptr, nullptr, SW_SHOWNORMAL);
+            break;
+        case CMD_OPEN_KB_DIR:
+            KeyboardSkinLibrary::ensureDir();
+            ShellExecuteW(nullptr, L"open", KeyboardSkinLibrary::directory().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            break;
         case CMD_COAT_BLACK:
             app.settings.customSkin.clear();
             app.settings.coatTheme = CatCoatTheme::ClassicBlack;
@@ -1236,9 +1845,21 @@ void showContextMenu(AppState& app, POINT screenPt) {
         case CMD_EYE_SOFT_AMBER: app.settings.eyeTheme = EyeColorTheme::SoftAmber; app.settings.saveToRegistry(); break;
         case CMD_EYE_REFERENCE_HAZEL: app.settings.eyeTheme = EyeColorTheme::ReferenceHazel; app.settings.saveToRegistry(); break;
         case CMD_EYE_OLIVE_GOLD: app.settings.eyeTheme = EyeColorTheme::OliveGold; app.settings.saveToRegistry(); break;
-        case CMD_KB_MILK:   app.settings.keyboardTheme = KeyboardTheme::ClassicMilk; app.settings.saveToRegistry(); break;
-        case CMD_KB_HACKER: app.settings.keyboardTheme = KeyboardTheme::MidnightHacker; app.settings.saveToRegistry(); break;
-        case CMD_KB_RETRO:  app.settings.keyboardTheme = KeyboardTheme::RetroCream; app.settings.saveToRegistry(); break;
+        case CMD_KB_MILK:
+            app.settings.customKeyboard.clear();
+            app.settings.keyboardTheme = KeyboardTheme::ClassicMilk;
+            app.settings.saveToRegistry();
+            break;
+        case CMD_KB_HACKER:
+            app.settings.customKeyboard.clear();
+            app.settings.keyboardTheme = KeyboardTheme::MidnightHacker;
+            app.settings.saveToRegistry();
+            break;
+        case CMD_KB_RETRO:
+            app.settings.customKeyboard.clear();
+            app.settings.keyboardTheme = KeyboardTheme::RetroCream;
+            app.settings.saveToRegistry();
+            break;
         case CMD_EYE_LIME:  app.settings.eyeTheme = EyeColorTheme::NeonChartreuse; app.settings.saveToRegistry(); break;
         case CMD_EYE_BLUE:  app.settings.eyeTheme = EyeColorTheme::SiameseBlue; app.settings.saveToRegistry(); break;
         case CMD_EYE_AMBER: app.settings.eyeTheme = EyeColorTheme::WarmAmber; app.settings.saveToRegistry(); break;
@@ -1269,6 +1890,9 @@ void showContextMenu(AppState& app, POINT screenPt) {
                 quitApp(app);
             }
             break;
+        case CMD_OPEN_SETTINGS:
+            showSettingsWindow(app);
+            break;
         case CMD_QUIT:
             quitApp(app);
             break;
@@ -1278,6 +1902,11 @@ void showContextMenu(AppState& app, POINT screenPt) {
                 app.settings.saveToRegistry();
             } else if (cmd >= CMD_SKIN_DELETE_BASE && cmd < CMD_SKIN_DELETE_BASE + CMD_SKIN_RANGE && cmd - CMD_SKIN_DELETE_BASE < app.skins.skins.size()) {
                 confirmDeleteSkin(app, app.skins.skins[cmd - CMD_SKIN_DELETE_BASE].id);
+            } else if (cmd >= CMD_KB_SELECT_BASE && cmd < CMD_KB_SELECT_BASE + CMD_SKIN_RANGE && cmd - CMD_KB_SELECT_BASE < app.kbLibrary.skins.size()) {
+                app.settings.customKeyboard = app.kbLibrary.skins[cmd - CMD_KB_SELECT_BASE].id;
+                app.settings.saveToRegistry();
+            } else if (cmd >= CMD_KB_DELETE_BASE && cmd < CMD_KB_DELETE_BASE + CMD_SKIN_RANGE && cmd - CMD_KB_DELETE_BASE < app.kbLibrary.skins.size()) {
+                confirmDeleteKeyboardSkin(app, app.kbLibrary.skins[cmd - CMD_KB_DELETE_BASE].id);
             }
             break;
     }
@@ -1290,7 +1919,13 @@ bool physicsLooksSane(const CatPhysics& p) {
         p.hindFoot.x.value, p.hindFoot.y.value, p.bodyShiftX.value, p.bodyTilt.value,
         p.bodySquash.value, p.headTilt.value, p.headYaw.value, p.headPitch.value,
         p.headOffsetY.value, p.eyeGaze.x.value, p.eyeGaze.y.value, p.pupilScale.value,
-        p.huntIntensity.value, p.mouseOffset.x.value, p.mouseOffset.y.value, p.time
+        p.huntIntensity.value, p.scruffDrag.value, p.scruffSwing.value, p.scruffSwingY.value, p.scruffTailSwing.value,
+        p.douniLeftRaise.value, p.douniRightRaise.value,
+        p.douniLeftKeyTarget.x.value, p.douniLeftKeyTarget.y.value,
+        p.douniRightKeyTarget.x.value, p.douniRightKeyTarget.y.value,
+        p.douniMouseBlend.value, p.douniLoafBlend.value,
+        p.kbImpactY.value, p.kbImpactTilt.value,
+        p.mouseOffset.x.value, p.mouseOffset.y.value, p.time
     };
     for (float v : vals) {
         if (!std::isfinite(v) || std::fabs(v) > 1.0e6f) return false;
@@ -1316,7 +1951,7 @@ void tickAndRender(AppState& app) {
         };
         int targetIdx = (int)((now - app.demoStartTime) / 0.13);
         while (app.demoStepIdx <= targetIdx && app.demoStepIdx < 10) {
-            app.physics.triggerKeyDown(demoKeys[app.demoStepIdx], app.settings);
+            app.physics.triggerKeyDown(demoKeys[app.demoStepIdx], app.settings, activeSkin(app).typingStyle == SkinTypingStyle::Douni, &app.input.activeKeys);
             app.demoStepIdx++;
         }
         if (app.demoStepIdx >= 10) app.demoActive = false;
@@ -1327,7 +1962,10 @@ void tickAndRender(AppState& app) {
     int w = std::max(1, (int)(wr.right - wr.left));
     int h = std::max(1, (int)(wr.bottom - wr.top));
 
-    app.physics.step(dt, wr, app.input, app.settings);
+    const SkinSpec& curSkin = activeSkin(app);
+    app.physics.step(dt, wr, app.input, app.settings,
+                     curSkin.typingStyle == SkinTypingStyle::Douni,
+                     curSkin.renderStyle == SkinRenderStyle::Douni);
     if (!physicsLooksSane(app.physics)) {
         // A single non-finite value would otherwise make every later frame draw nothing (the cat
         // "vanishes" until restart). Rebuild the pose but keep the session statistics.
@@ -1337,7 +1975,7 @@ void tickAndRender(AppState& app) {
     }
 
     // Smart Click-Through + Petting Detection
-    if (!app.isDragging && app.activeResizeCorner < 0) {
+    if (!app.isDragging && app.activeResizeCorner < 0 && !app.isRotating) {
         POINT cur = {};
         GetCursorPos(&cur);
         if (PtInRect(&wr, cur)) {
@@ -1346,15 +1984,15 @@ void tickAndRender(AppState& app) {
                 (float)(cur.y - wr.top)  / (float)h * CatPhysics::CanvasHeight
             };
             if (app.settings.isEditMode) {
-                int editHit = CatRenderer::hitTestEditOverlay(rawCp);
-                setClickThrough(app.hwnd, editHit < 0);
+                setClickThrough(app.hwnd, false);
                 app.hasLastHover = false;
             } else {
-                Pt cp = app.settings.flipHorizontal ? Pt{ CatPhysics::CanvasWidth - rawCp.x, rawCp.y } : rawCp;
+                Pt cp = CatRenderer::canvasPointToCatSpace(rawCp, app.settings.flipHorizontal, app.settings.rotationDeg);
                 CatHitZone zone = CatRenderer::hitTest(cp, app.physics, activeSkin(app));
                 app.physics.updateTailHover(&cp);
                 if (zone == CatHitZone::Head) {
-                    if (app.hasLastHover) {
+                    bool skipPetForHunt = (curSkin.renderStyle == SkinRenderStyle::Douni && app.physics.huntIntensity.value > 0.20f);
+                    if (!skipPetForHunt && app.hasLastHover) {
                         float d = std::hypot(cp.x - app.lastHoverCanvas.x, cp.y - app.lastHoverCanvas.y);
                         if (d > 1.2f && d < 80.0f) {
                             app.physics.registerPetStroke(cp, d, true, app.settings);
@@ -1391,7 +2029,7 @@ void tickAndRender(AppState& app) {
     Gdiplus::Graphics g(&bmp);
     g.Clear(app.settings.obsCaptureMode == 2 ? Gdiplus::Color(255, 0, 255, 0) : Gdiplus::Color(0, 0, 0, 0));
     g.ScaleTransform((float)w / CatPhysics::CanvasWidth, (float)h / CatPhysics::CanvasHeight);
-    CatRenderer::draw(g, app.physics, app.settings, activeSkin(app));
+    CatRenderer::draw(g, app.physics, app.settings, activeSkin(app), activeKeyboardSkin(app));
 
     POINT ptDst = { wr.left, wr.top };
     SIZE szWnd = { w, h };
@@ -1474,6 +2112,25 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_SETCURSOR:
             if (LOWORD(lParam) == HTCLIENT) {
+                if (app && hwnd == app->hwnd && app->settings.isEditMode) {
+                    RECT wr = {};
+                    GetWindowRect(hwnd, &wr);
+                    int w = std::max(1, (int)(wr.right - wr.left));
+                    int h = std::max(1, (int)(wr.bottom - wr.top));
+                    POINT cur = {};
+                    GetCursorPos(&cur);
+                    Pt rawCp = {
+                        (float)(cur.x - wr.left) / (float)w * CatPhysics::CanvasWidth,
+                        (float)(cur.y - wr.top)  / (float)h * CatPhysics::CanvasHeight
+                    };
+                    int hit = CatRenderer::hitTestEditOverlay(rawCp);
+                    if (hit == 0 || hit == 3) { SetCursor(LoadCursorW(nullptr, IDC_SIZENWSE)); return TRUE; }
+                    if (hit == 1 || hit == 2) { SetCursor(LoadCursorW(nullptr, IDC_SIZENESW)); return TRUE; }
+                    if (hit == 20) { SetCursor(LoadCursorW(nullptr, IDC_HAND)); return TRUE; }
+                    if (hit == 12) { SetCursor(LoadCursorW(nullptr, IDC_SIZEALL)); return TRUE; }
+                    SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+                    return TRUE;
+                }
                 SetCursor(LoadCursorW(nullptr, IDC_HAND));
                 return TRUE;
             }
@@ -1481,6 +2138,24 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_LBUTTONDBLCLK:
             if (app && hwnd == app->hwnd) {
+                if (app->settings.isEditMode) {
+                    RECT wr = {};
+                    GetWindowRect(hwnd, &wr);
+                    int w = std::max(1, (int)(wr.right - wr.left));
+                    int h = std::max(1, (int)(wr.bottom - wr.top));
+                    POINT cur = {};
+                    GetCursorPos(&cur);
+                    Pt rawCp = {
+                        (float)(cur.x - wr.left) / (float)w * CatPhysics::CanvasWidth,
+                        (float)(cur.y - wr.top)  / (float)h * CatPhysics::CanvasHeight
+                    };
+                    if (CatRenderer::hitTestEditOverlay(rawCp) == 20) {
+                        app->settings.rotationDeg = 0.0f;
+                        app->settings.saveToRegistry();
+                        refreshSettingsWindow(*app);
+                        return 0;
+                    }
+                }
                 app->settings.isEditMode = !app->settings.isEditMode;
             }
             return 0;
@@ -1500,13 +2175,14 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                         (float)(cur.y - wr.top)  / (float)h * CatPhysics::CanvasHeight
                     };
                     int hit = CatRenderer::hitTestEditOverlay(rawCp);
-                    if (hit == 10) {
-                        app->settings.flipHorizontal = !app->settings.flipHorizontal;
-                        app->settings.saveToRegistry();
-                        return 0;
-                    }
-                    if (hit == 11) {
-                        app->settings.isEditMode = false;
+                    if (hit == 20) {
+                        app->isRotating = true;
+                        app->rotateMoved = false;
+                        float cx = (float)wr.left + (float)w * 0.5f;
+                        float cy = (float)wr.top + (float)h * 0.5f;
+                        app->rotateStartAngle = std::atan2((float)cur.y - cy, (float)cur.x - cx);
+                        app->rotateStartDeg = app->settings.rotationDeg;
+                        SetCapture(hwnd);
                         return 0;
                     }
                     if (hit >= 0 && hit <= 3) {
@@ -1517,6 +2193,10 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                         else if (hit == 2) app->resizeAnchorScreenPt = { wr.right, wr.top };
                         else app->resizeAnchorScreenPt = { wr.left, wr.top };
                         SetCapture(hwnd);
+                        return 0;
+                    }
+                    if (hit < 0) {
+                        app->settings.isEditMode = false;
                         return 0;
                     }
                 }
@@ -1530,6 +2210,33 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
 
         case WM_MOUSEMOVE:
+            if (app && app->isRotating) {
+                RECT wr = {};
+                GetWindowRect(hwnd, &wr);
+                int w = std::max(1, (int)(wr.right - wr.left));
+                int h = std::max(1, (int)(wr.bottom - wr.top));
+                POINT cur = {};
+                GetCursorPos(&cur);
+                float cx = (float)wr.left + (float)w * 0.5f;
+                float cy = (float)wr.top + (float)h * 0.5f;
+                float angle = std::atan2((float)cur.y - cy, (float)cur.x - cx);
+                float deltaDeg = (angle - app->rotateStartAngle) * (180.0f / 3.14159265f);
+                while (deltaDeg > 180.0f) deltaDeg -= 360.0f;
+                while (deltaDeg < -180.0f) deltaDeg += 360.0f;
+                if (std::fabs(deltaDeg) > 1.5f) app->rotateMoved = true;
+                if (app->rotateMoved) {
+                    float deg = app->rotateStartDeg + deltaDeg;
+                    while (deg > 180.0f) deg -= 360.0f;
+                    while (deg <= -180.0f) deg += 360.0f;
+                    // Soft-snap to cardinal angles within +/-5 deg
+                    const float snaps[5] = { 0.0f, 90.0f, -90.0f, 180.0f, -180.0f };
+                    for (float s : snaps) {
+                        if (std::fabs(deg - s) <= 5.0f) { deg = (s == -180.0f ? 180.0f : s); break; }
+                    }
+                    app->settings.rotationDeg = deg;
+                }
+                return 0;
+            }
             if (app && app->activeResizeCorner >= 0) {
                 POINT cur = {};
                 GetCursorPos(&cur);
@@ -1554,12 +2261,27 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 int nx = app->dragStartWinOrigin.x + (cur.x - app->dragStartCursor.x);
                 int ny = app->dragStartWinOrigin.y + (cur.y - app->dragStartCursor.y);
                 float stepDx = (float)(nx - wr.left);
-                app->physics.setDragging(true, app->settings.flipHorizontal ? -stepDx : stepDx);
+                float stepDy = (float)(ny - wr.top);
+                float rad = -app->settings.rotationDeg * (3.14159265f / 180.0f);
+                float c = std::cos(rad), s = std::sin(rad);
+                float localDx = stepDx * c - stepDy * s;
+                float localDy = stepDx * s + stepDy * c;
+                app->physics.setDragging(true, app->settings.flipHorizontal ? -localDx : localDx, localDy);
                 SetWindowPos(hwnd, nullptr, nx, ny, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
             }
             return 0;
 
         case WM_LBUTTONUP:
+            if (app && app->isRotating) {
+                app->isRotating = false;
+                ReleaseCapture();
+                if (!app->rotateMoved) {
+                    app->settings.flipHorizontal = !app->settings.flipHorizontal;
+                }
+                app->settings.saveToRegistry();
+                refreshSettingsWindow(*app);
+                return 0;
+            }
             if (app && app->activeResizeCorner >= 0) {
                 app->activeResizeCorner = -1;
                 ReleaseCapture();
@@ -1568,6 +2290,7 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 app->settings.posX = wr.left;
                 app->settings.posY = wr.top;
                 app->settings.saveToRegistry();
+                refreshSettingsWindow(*app);
                 return 0;
             }
             if (app && app->isDragging) {
@@ -1579,6 +2302,7 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 app->settings.posX = wr.left;
                 app->settings.posY = wr.top;
                 app->settings.saveToRegistry();
+                refreshSettingsWindow(*app);
             }
             return 0;
 
@@ -1611,6 +2335,10 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_CAPTURECHANGED:
             if (app && hwnd == app->hwnd) {
                 app->rButtonDown = false;
+                if (app->isDragging) {
+                    app->isDragging = false;
+                    app->physics.setDragging(false);
+                }
             }
             return 0;
 
@@ -1766,6 +2494,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     g_app = &app;
     app.settings.loadFromRegistry();
     app.skins.reload();
+    app.kbLibrary.reload();
     app.isElevated = isCurrentProcessElevated();
 
     // "Always run as administrator": hand over to an elevated copy (one UAC prompt). If the user
@@ -1790,8 +2519,12 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
         setAutoStartEnabled(true);
     }
 
-    app.input.onKeyDown = [&](PhysicalKey k) { app.physics.triggerKeyDown(k, app.settings); };
-    app.input.onMouseClick = [&](int btn, bool down) { app.physics.triggerMouseClick(btn, down, app.settings); };
+    app.input.onKeyDown = [&](PhysicalKey k) {
+        app.physics.triggerKeyDown(k, app.settings, activeSkin(app).typingStyle == SkinTypingStyle::Douni, &app.input.activeKeys);
+    };
+    app.input.onMouseClick = [&](int btn, bool down) {
+        app.physics.triggerMouseClick(btn, down, app.settings, activeSkin(app).renderStyle == SkinRenderStyle::Douni);
+    };
 
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);

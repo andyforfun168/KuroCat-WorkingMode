@@ -1,8 +1,10 @@
 # 🐱 KuroCat — 全状态键盘鼠标桌面萌猫 (macOS / Windows / Linux / 统信 UOS)
 
 <p align="center">
-  <b>简体中文</b> 本仓库是 [chanke17/KuroCat](https://github.com/chanke17/KuroCat) 的 fork。v1.4.1 合入原作者 v1.4.0 的换装间、自定义皮肤、睡姿与表情、数位板、镜像及 OBS 等功能；保留橙眼图标、本 fork 的美短 / 橘白纯白手臂和原有肩部连接、脸颊下巴与默认瞳色。没有应用内更新功能，请从[本仓库 Release](https://github.com/andyforfun168/KuroCatAndy/releases/latest)手动下载。
+  <b>简体中文</b> | <a href="README.en.md">English</a>
 </p>
+
+v1.4.2 同步原作者 v1.4.1 的原生设置、自定义键盘、旋转与拖拽物理及 v1.4.0 全部新功能；保留定稿白手臂、默认瞳色和橙眼图标，修复睡觉尾根白边与生气眉毛，不包含前扑实验动画，也没有应用内更新功能。
 
 <p align="center">
   <img src="assets/demo_typing.gif" width="265" alt="敲键盘打字"/>
@@ -44,7 +46,7 @@
   - **瞳色与缩放**：6 种瞳色、5 档尺寸缩放、今日击键与实时 KPM 统计。
 
 
-- **🆕 v1.4.1 新功能**
+- **🆕 v1.4.2 新功能**
   - 换装间导入 / 导出 `.kurocat` 自定义皮肤，格式见[皮肤说明](docs/skin-format.md)。
   - 新增打哈欠、蜷缩睡姿、快速打字生气和甩鼠眩晕等动作，以及数位板 / 触控笔模式。
   - 支持左右镜像、OBS 捕获设置、编辑模式、多语言及全屏自动隐藏等选项；同步原作者平台修复。

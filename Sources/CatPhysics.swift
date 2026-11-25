@@ -92,6 +92,18 @@ final class CatSettings {
     var flipHorizontal: Bool {
         didSet { UserDefaults.standard.set(flipHorizontal, forKey: "KuroCat.FlipHorizontal") }
     }
+    /// Rotation angle in degrees [-180, 180], persisted across restarts
+    var rotationDeg: CGFloat {
+        didSet { UserDefaults.standard.set(Double(rotationDeg), forKey: "KuroCat.RotationDeg") }
+    }
+    /// Sticker-style crisp white outer outline around the cat (optional in Settings)
+    var whiteOutline: Bool {
+        didSet { UserDefaults.standard.set(whiteOutline, forKey: "KuroCat.WhiteOutline") }
+    }
+    /// Fast-typing angry expression toggle (optional in Settings)
+    var enableAnger: Bool {
+        didSet { UserDefaults.standard.set(enableAnger, forKey: "KuroCat.EnableAnger") }
+    }
     /// "zh" or "en"
     var language: String {
         didSet { UserDefaults.standard.set(language, forKey: "KuroCat.Language") }
@@ -128,6 +140,14 @@ final class CatSettings {
     var activeSkin: SkinSpec {
         SkinLibrary.shared.skin(id: customSkin) ?? SkinSpec.builtIn(coatTheme)
     }
+    /// Content id of the imported .kurokb / keyboard.json skin in use; empty = the built-in keyboardTheme.
+    var customKeyboard: String {
+        didSet { UserDefaults.standard.set(customKeyboard, forKey: "KuroCat.CustomKeyboard") }
+    }
+    /// The keyboard/mouse skin the renderer draws: the imported one while its file still exists, else built-in.
+    var activeKeyboardSkin: KeyboardSkinSpec {
+        KeyboardSkinLibrary.shared.skin(id: customKeyboard) ?? KeyboardSkinSpec.builtIn(keyboardTheme)
+    }
 
     private init() {
         let d = UserDefaults.standard
@@ -142,6 +162,9 @@ final class CatSettings {
         autoHideFullscreen = d.object(forKey: "KuroCat.AutoHideFullscreen") as? Bool ?? false
         tabletMode = d.object(forKey: "KuroCat.TabletMode") as? Int ?? 0
         flipHorizontal = d.object(forKey: "KuroCat.FlipHorizontal") as? Bool ?? false
+        rotationDeg = CGFloat(d.object(forKey: "KuroCat.RotationDeg") as? Double ?? 0.0)
+        whiteOutline = d.object(forKey: "KuroCat.WhiteOutline") as? Bool ?? true
+        enableAnger = d.object(forKey: "KuroCat.EnableAnger") as? Bool ?? true
         language = d.string(forKey: "KuroCat.Language") ?? "zh"
         petInteraction = d.object(forKey: "KuroCat.PetInteraction") as? Bool ?? true
         fullClickThrough = d.object(forKey: "KuroCat.FullClickThrough") as? Bool ?? false
@@ -153,6 +176,7 @@ final class CatSettings {
         let savedEye = d.string(forKey: "KuroCat.EyeTheme") ?? ""
         eyeTheme = EyeColorTheme.saved(savedEye)
         customSkin = d.string(forKey: "KuroCat.CustomSkin") ?? ""
+        customKeyboard = d.string(forKey: "KuroCat.CustomKeyboard") ?? ""
     }
 }
 
@@ -272,14 +296,19 @@ final class CatPhysics {
     var eyeGaze = Spring2D(.zero)    // normalized [-1..1, -1..1]
     var pupilScale = Spring1D(1.0)
     var huntIntensity = Spring1D(0)  // 0 = normal slit pupils, 1 = full hunting crouch + big round boba pupils!
-    var scruffDrag = Spring1D(0)     // 0 = seated, 1 = picked up by neck scruff
-    var scruffSwing = Spring1D(0)    // pendulum sway while dragged horizontally
-    var lieIntensity = Spring1D(0)   // 0 = sitting, 1 = lying cozily on keyboard while idle
-    var angerIntensity = Spring1D(0) // 0 = calm, 1 = angry from very fast typing
-    var dizzyIntensity = Spring1D(0) // 0 = clear, 1 = dizzy spiral eyes + slumped beside keyboard
+    var scruffDrag = Spring1D(0)      // 0 = seated, 1 = picked up by neck scruff
+    var scruffSwing = Spring1D(0)     // horizontal pendulum sway while dragged (+ = trails left when dragged right)
+    var scruffSwingY = Spring1D(0)    // vertical inertia while dragged (+ = stretches down when lifted up, - = floats up when dropped)
+    var scruffTailSwing = Spring1D(0) // looser secondary tail whip/billow while dragged
+    var lieIntensity = Spring1D(0)    // 0 = sitting, 1 = lying cozily on keyboard while idle
+    var angerIntensity = Spring1D(0)  // 0 = calm, 1 = angry from very fast typing
+    var dizzyIntensity = Spring1D(0)  // 0 = clear, 1 = dizzy spiral eyes + slumped beside keyboard
     private(set) var dizzyPhase: CGFloat = 0
-    private var isScruffDragging = false
+    private(set) var isScruffDragging = false
     private var scruffDragDx: CGFloat = 0
+    private var scruffDragDy: CGFloat = 0
+    private var scruffDragAccumX: CGFloat = 0
+    private var scruffDragAccumY: CGFloat = 0
     private var fastMouseDuration: CGFloat = 0
     private var dizzyTimer: CGFloat = 0
     var mouseOffset = Spring2D(.zero)
@@ -325,7 +354,7 @@ final class CatPhysics {
     private(set) var time: CGFloat = 0
     private(set) var tailPhase: CGFloat = 0
     private var nextBlinkTime: CGFloat = 3.2
-    private var blinkProgress: CGFloat = 0 // 0 = open, 1 = closed
+    private(set) var blinkProgress: CGFloat = 0 // 0 = open, 1 = closed
     private(set) var isBlinking = false
     private var blinkTimer: CGFloat = 0
 
@@ -351,6 +380,25 @@ final class CatPhysics {
     private var recentLeftKey: (key: PhysicalKey, time: CFTimeInterval)?
     private var recentRightKey: (key: PhysicalKey, time: CFTimeInterval)?
     private var lastTypedPoint: CGPoint?
+
+    // Video-2 Xiao Douni independent signed slap arm springs (-1 = slammed on key, 0 = ready, +1 = high windup)
+    var douniSlapSide: Int = 0
+    var douniSlapTimer: CGFloat = 0
+    var douniLastLeftKeyTime: CFTimeInterval = -10
+    var douniLastRightKeyTime: CFTimeInterval = -10
+    var douniLeftRaise = Spring1D(0)
+    var douniRightRaise = Spring1D(0)
+    var douniLeftKeyTarget = Spring2D(CGPoint(x: 318, y: 422))
+    var douniRightKeyTarget = Spring2D(CGPoint(x: 512, y: 462))
+    var douniMouseBlend = Spring1D(0)
+    var douniLoafBlend = Spring1D(0)
+    var scruffHoldTime: CGFloat = 0
+    var scruffDropTimer: CGFloat = 0
+    // Disney 12-principles tactile keyboard impact recoil, tilt shudder & keycap spark burst
+    var kbImpactY = Spring1D(0)
+    var kbImpactTilt = Spring1D(0)
+    var kbSparkTimer: CGFloat = 0
+    var kbSparkKey: PhysicalKey? = nil
 
     // Computed eye closure (0 = wide open, 0.55 = half squint, 1 = fully closed)
     var effectiveEyeClosure: CGFloat {
@@ -397,10 +445,68 @@ final class CatPhysics {
         }
 
         // Expressive micro-reactions
-        bodySquash.velocity -= 1.3
-        earTwitch.velocity += (key.prefersLeftPaw ? -3.8 : 3.8)
-        headTilt.velocity += (key.prefersLeftPaw ? -1.4 : 1.4)
-        pupilScale.target = 1.16
+        if CatSettings.shared.activeSkin.typingStyle == .douni {
+            let keyPt = KeyboardLayout.v2KeyCellCenter(for: vk)
+            let useLeft = vk.prefersLeftPaw
+            douniSlapSide = useLeft ? 0 : 1
+            douniSlapTimer = 0.28
+            douniMouseBlend.target = 0
+            if douniMouseBlend.value > 0.05 {
+                douniMouseBlend.velocity = min(douniMouseBlend.velocity, -14.0)
+            }
+            douniLoafBlend.target = 0
+            let angerBoost: CGFloat = 1.0 + max(0, min(1, angerIntensity.value)) * 0.35
+            if useLeft {
+                let chordOther = (now - douniLastRightKeyTime) < 0.035
+                douniLastLeftKeyTime = now
+                douniLeftKeyTarget.target = keyPt
+                // Independent signed spring (-1 = slam on keycap, +1 = flung high):
+                // On rapid same-side repeat, visibly pop up (+0.50) then whip down so EVERY keystroke re-slaps cleanly!
+                if douniLeftRaise.value < -0.15 {
+                    douniLeftRaise.value = 0.50
+                    douniLeftRaise.velocity = -15.5 * angerBoost
+                } else {
+                    douniLeftRaise.velocity = -22.0 * angerBoost
+                }
+                douniLeftRaise.target = -1.0
+                if !chordOther {
+                    douniRightRaise.target = 1.02
+                    douniRightRaise.velocity = max(douniRightRaise.velocity + 6.0, 17.0 * angerBoost)
+                }
+                leftPaw.y.velocity += 220
+            } else {
+                let chordOther = (now - douniLastLeftKeyTime) < 0.035
+                douniLastRightKeyTime = now
+                douniRightKeyTarget.target = keyPt
+                if douniRightRaise.value < -0.15 {
+                    douniRightRaise.value = 0.50
+                    douniRightRaise.velocity = -15.5 * angerBoost
+                } else {
+                    douniRightRaise.velocity = -22.0 * angerBoost
+                }
+                douniRightRaise.target = -1.0
+                if !chordOther {
+                    douniLeftRaise.target = 1.02
+                    douniLeftRaise.velocity = max(douniLeftRaise.velocity + 6.0, 17.0 * angerBoost)
+                }
+                rightPaw.y.velocity += 220
+            }
+            // Disney Squash & Stretch + Impact Recoil + Secondary Action on keyboard, cord & ears!
+            kbImpactY.velocity += 24.0 * angerBoost
+            kbImpactTilt.velocity += (useLeft ? -10.5 : 10.5) * angerBoost
+            kbSparkTimer = 0.14
+            kbSparkKey = vk
+            bodySquash.velocity -= 2.2
+            headOffsetY.velocity += 44
+            earTwitch.velocity += (useLeft ? -6.5 : 6.5)
+            headTilt.velocity += (useLeft ? -2.8 : 2.8)
+            pupilScale.target = 1.24
+        } else {
+            bodySquash.velocity -= 1.3
+            earTwitch.velocity += (key.prefersLeftPaw ? -3.8 : 3.8)
+            headTilt.velocity += (key.prefersLeftPaw ? -1.4 : 1.4)
+            pupilScale.target = 1.16
+        }
 
         // Wake up immediately
         sleepiness = 0
@@ -415,6 +521,13 @@ final class CatPhysics {
         sleepiness = 0
         if isDown {
             let now = CACurrentMediaTime()
+            if CatSettings.shared.activeSkin.renderStyle == .douni {
+                douniSlapTimer = 0
+                douniLeftRaise.target = 0
+                douniRightRaise.target = 0
+                douniLoafBlend.target = 0
+                douniMouseBlend.target = 1.0
+            }
             if button == 0 {
                 mousePressLeft.target = 1.0
                 leftPaw.y.velocity += 130
@@ -440,17 +553,32 @@ final class CatPhysics {
     }
 
     /// Called by OverlayWindow when the user drags the cat window (triggers scruff-pickup posture!).
-    func setDragging(_ dragging: Bool, dragDx: CGFloat = 0) {
+    func setDragging(_ dragging: Bool, dragDx: CGFloat = 0, dragDy: CGFloat = 0) {
+        let wasDragging = isScruffDragging
         isScruffDragging = dragging
         if dragging {
-            scruffDragDx = dragDx
+            if !wasDragging {
+                scruffHoldTime = 0
+                scruffDropTimer = 0
+                scruffDragAccumX = 0
+                scruffDragAccumY = 0
+            }
+            scruffDragAccumX += dragDx
+            scruffDragAccumY += dragDy
             sleepiness = 0
             dizzyTimer = 0
             fastMouseDuration = 0
         } else {
             scruffDragDx = 0
-            // Cute soft squash bounce when set back down
-            bodySquash.velocity -= 1.8
+            scruffDragDy = 0
+            scruffDragAccumX = 0
+            scruffDragAccumY = 0
+            if wasDragging {
+                scruffDropTimer = 0.16
+            }
+            // Cute soft squash bounce when set back down (Video 1 drop settle!)
+            bodySquash.velocity -= 2.4
+            headOffsetY.velocity += 78
         }
     }
 
@@ -706,11 +834,32 @@ final class CatPhysics {
         let dizzy = max(0, min(1, dizzyIntensity.value))
 
         // 2c. Scruff-drag pickup, idle lie-on-keyboard, and fast-typing anger
+        if isScruffDragging {
+            scruffHoldTime += dt
+            scruffDropTimer = 0
+            let frameScale = (1.0 / 60.0) / max(dt, 1.0 / 120.0)
+            let instDx = scruffDragAccumX * frameScale
+            let instDy = scruffDragAccumY * frameScale
+            scruffDragAccumX = 0
+            scruffDragAccumY = 0
+            scruffDragDx = scruffDragDx * 0.52 + instDx * 0.85
+            scruffDragDy = scruffDragDy * 0.52 + instDy * 0.85
+        } else {
+            scruffDropTimer = max(0, scruffDropTimer - dt)
+            if scruffDrag.value < 0.02 { scruffHoldTime = 0 }
+            scruffDragDx *= 0.80
+            scruffDragDy *= 0.80
+        }
         scruffDrag.target = isScruffDragging ? 1.0 : 0.0
-        scruffSwing.target = isScruffDragging ? max(-0.34, min(0.34, -scruffDragDx * 0.018)) : 0.0
-        scruffDragDx *= 0.82
-        scruffDrag.step(dt: dt, stiffness: 170, damping: 16)
-        scruffSwing.step(dt: dt, stiffness: 110, damping: 10)
+        // Positive scruffSwing when dragged right (+dx) rotates dangling tips left (trailing behind motion)
+        scruffSwing.target = isScruffDragging ? 0.92 * tanh(scruffDragDx / 18.0) : 0.0
+        // Positive scruffSwingY when dragged up (-dy) stretches limbs/tail down; negative when dragged down floats them up
+        scruffSwingY.target = isScruffDragging ? 0.78 * tanh(-scruffDragDy / 18.0) : 0.0
+        scruffTailSwing.target = isScruffDragging ? 1.22 * tanh(scruffDragDx / 16.0) : 0.0
+        scruffDrag.step(dt: dt, stiffness: 190, damping: 17)
+        scruffSwing.step(dt: dt, stiffness: 92, damping: 7.4)
+        scruffSwingY.step(dt: dt, stiffness: 108, damping: 8.4)
+        scruffTailSwing.step(dt: dt, stiffness: 58, damping: 5.2)
         let scruff = max(0, min(1, scruffDrag.value))
 
         lieIntensity.target = (!isScruffDragging && dizzyTimer <= 0 && sleepiness > 0.65)
@@ -719,7 +868,7 @@ final class CatPhysics {
         let lie = max(0, min(1, lieIntensity.value))
 
         let kpm = CGFloat(engine.currentKPM)
-        angerIntensity.target = (!isScruffDragging && dizzyTimer <= 0 && kpm >= 240)
+        angerIntensity.target = (CatSettings.shared.enableAnger && !isScruffDragging && dizzyTimer <= 0 && kpm >= 240)
             ? min(1.0, (kpm - 240.0) / 140.0) : 0.0
         angerIntensity.step(dt: dt, stiffness: 70, damping: 14)
         let anger = max(0, min(1, angerIntensity.value))
@@ -811,15 +960,86 @@ final class CatPhysics {
             if tabletTrail[i].age >= 0.72 { tabletTrail.remove(at: i) }
         }
 
-        // Left paw target (dangles limply during scruff pickup / sprawls when dizzy / tucks when lying)
-        if scruff > 0.35 {
-            leftPaw.target = CGPoint(x: CatPhysics.seatAnchor.x - 16 + scruffSwing.value * 26, y: CatPhysics.seatAnchor.y + 12)
+        let isDouniTyping = CatSettings.shared.activeSkin.typingStyle == .douni
+        let isDouniSkin = CatSettings.shared.activeSkin.renderStyle == .douni
+        if isDouniTyping {
+            douniSlapTimer = max(0, douniSlapTimer - dt)
+            let leftHeldNow = activeKeys.contains { $0.prefersLeftPaw }
+            let rightHeldNow = activeKeys.contains { !$0.prefersLeftPaw }
+            if douniSlapTimer <= 0.08 {
+                if !leftHeldNow {
+                    douniLeftRaise.target = 0
+                } else if douniLeftRaise.target > 0.2 {
+                    douniLeftRaise.target = -0.85
+                }
+                if !rightHeldNow {
+                    douniRightRaise.target = 0
+                } else if douniRightRaise.target > 0.2 {
+                    douniRightRaise.target = -0.85
+                }
+            }
+            douniLeftRaise.step(dt: dt, stiffness: 680, damping: 25)
+            douniRightRaise.step(dt: dt, stiffness: 680, damping: 25)
+            douniLeftKeyTarget.step(dt: dt, stiffness: 820, damping: 28)
+            douniRightKeyTarget.step(dt: dt, stiffness: 820, damping: 28)
+            kbImpactY.target = 0
+            kbImpactTilt.target = 0
+            kbImpactY.step(dt: dt, stiffness: 560, damping: 16)
+            kbImpactTilt.step(dt: dt, stiffness: 500, damping: 14)
+            kbSparkTimer = max(0, kbSparkTimer - dt)
+        } else {
+            douniSlapTimer = 0
+            douniLeftRaise.target = 0
+            douniRightRaise.target = 0
+            kbImpactY.value = 0; kbImpactTilt.value = 0; kbSparkTimer = 0
+        }
+        if isDouniSkin {
+            // Deliberate petting threshold (avoids abrupt hijacking on 1px cursor brush or fast hunting whip!) + silky Disney ease spring
+            let wantsLoaf = !isScruffDragging && scruff < 0.08 && dizzy < 0.15 && hunt < 0.22
+                && (petHeadIntensity > 0.30 || isCurrentlyPetting || petBodyIntensity > 0.35 || sleepiness > 0.48)
+            douniLoafBlend.target = wantsLoaf ? 1.0 : 0.0
+            douniLoafBlend.step(dt: dt, stiffness: 52, damping: 13.5)
+            let typingNow = (douniSlapTimer > 0.04 || !activeKeys.isEmpty)
+            let tabletUsed = isTabletActive && (engine.isPenInProximity || curLeftMouse || mouseActivelyUsed)
+            let wantsMouse = !isScruffDragging && !wantsLoaf && !typingNow && (mouseActivelyUsed || tabletUsed)
+            douniMouseBlend.target = wantsMouse ? 1.0 : 0.0
+            douniMouseBlend.step(dt: dt, stiffness: wantsMouse ? 280 : 460, damping: wantsMouse ? 22 : 28)
+            // Keep tablet ink trail alive for Xiao Douni when drawing on the hand-drawn comic tablet!
+            if isTabletActive && wantsMouse && (curLeftMouse || engine.penPressure > 0.02) {
+                let nib = tabletNib.point
+                let last = tabletTrail.last?.point
+                if last == nil || hypot(nib.x - last!.x, nib.y - last!.y) >= 1.8 {
+                    tabletTrail.append(TabletStrokePoint(point: nib, age: 0))
+                    if tabletTrail.count > 28 { tabletTrail.removeFirst() }
+                }
+            }
+        } else {
+            douniLoafBlend.value = 0; douniLoafBlend.target = 0
+            douniMouseBlend.value = 0; douniMouseBlend.target = 0
+        }
+        let douniActive = isDouniTyping && (douniSlapTimer > 0.01 || !activeKeys.isEmpty) && scruff <= 0.25 && dizzy <= 0.35 && lie <= 0.45
+
+        // Left paw target (Video 1 chubby mid-air dangling mittens during scruff / Video 2 Douni slap / normal typing)
+        if scruff > 0.24 {
+            let scruffS = scruff * scruff * (3.0 - 2.0 * scruff)
+            let liftSeatY = CatPhysics.seatAnchor.y - scruffS * 44.0
+            let sway = scruffSwing.value * 24.0 + sin(time * 7.6) * 3.0
+            let bob = cos(time * 7.6) * 2.2
+            leftPaw.target = CGPoint(x: CatPhysics.seatAnchor.x + bodyShiftX.value - 20 + sway, y: liftSeatY + 24 + bob)
             leftPawTyping = true
             leftPawOnMouse = false
         } else if dizzy > 0.35 {
             // Relaxed paws staying natural inside the toppled cat frame
             leftPaw.target = CatPhysics.leftPawRest
             leftPawTyping = false
+            leftPawOnMouse = false
+        } else if douniActive {
+            let raise = max(0, min(1.18, douniLeftRaise.value))
+            let sx = CatPhysics.seatAnchor.x + bodyShiftX.value
+            let downPt = leftKey.map { KeyboardLayout.canvasPoint(for: $0) } ?? CGPoint(x: sx - 44, y: 246)
+            let highPt = CGPoint(x: sx - 84, y: 156) // High windup beside left cheek (Video 2!)
+            leftPaw.target = CGPoint(x: downPt.x + (highPt.x - downPt.x) * raise, y: downPt.y + (highPt.y - downPt.y) * raise)
+            leftPawTyping = true
             leftPawOnMouse = false
         } else if let lk = leftKey {
             leftPaw.target = KeyboardLayout.canvasPoint(for: lk)
@@ -849,12 +1069,23 @@ final class CatPhysics {
         }
 
         // Right paw target
-        if scruff > 0.35 {
-            rightPaw.target = CGPoint(x: CatPhysics.seatAnchor.x + 16 + scruffSwing.value * 26, y: CatPhysics.seatAnchor.y + 12)
+        if scruff > 0.24 {
+            let scruffS = scruff * scruff * (3.0 - 2.0 * scruff)
+            let liftSeatY = CatPhysics.seatAnchor.y - scruffS * 44.0
+            let sway = scruffSwing.value * 24.0 + sin(time * 7.6 + 2.1) * 3.0
+            let bob = cos(time * 7.6 + 2.1) * 2.2
+            rightPaw.target = CGPoint(x: CatPhysics.seatAnchor.x + bodyShiftX.value + 16 + sway, y: liftSeatY + 24 + bob)
             rightPawTyping = true
         } else if dizzy > 0.35 {
             rightPaw.target = CatPhysics.rightPawRest
             rightPawTyping = false
+        } else if douniActive {
+            let raise = max(0, min(1.18, douniRightRaise.value))
+            let sx = CatPhysics.seatAnchor.x + bodyShiftX.value
+            let downPt = rightKey.map { KeyboardLayout.canvasPoint(for: $0) } ?? CGPoint(x: sx + 22, y: 246)
+            let highPt = CGPoint(x: sx - 8, y: 158) // High windup curled right across the cheek/face (Video 2!)
+            rightPaw.target = CGPoint(x: downPt.x + (highPt.x - downPt.x) * raise, y: downPt.y + (highPt.y - downPt.y) * raise)
+            rightPawTyping = true
         } else if let rk = rightKey {
             rightPaw.target = KeyboardLayout.canvasPoint(for: rk)
             rightPawTyping = true
@@ -1090,6 +1321,8 @@ enum SkinSpace: String { case head, skull, body, tail, leftEar, rightEar }
 enum SkinBuild: String { case standard, sleek }
 enum SkinHeadSurface: String { case dome, plane }
 enum SkinAnchorPoint: String { case headTop, face, neck, tailTip }
+enum SkinRenderStyle: String { case standard, douni }
+enum SkinTypingStyle: String { case standard, douni }
 
 /// One pen-tool anchor; in/out are absolute handle positions in the same part space.
 struct SkinBezierAnchor { var x, y, inX, inY, outX, outY: CGFloat }
@@ -1150,6 +1383,8 @@ struct SkinSpec {
     var marks: [SkinMark] = []
     var shape = SkinShape()
     var headSurface: SkinHeadSurface = .dome
+    var renderStyle: SkinRenderStyle = .standard
+    var typingStyle: SkinTypingStyle = .standard
     /// "idleLegs": "legs" (default) tints the sitting front legs with palette.legs; "chest" keeps them
     /// chest-coloured like the built-in coats.
     var idleLegsTinted = true
@@ -1367,6 +1602,12 @@ struct SkinSpec {
             guard let ils = il as? String, ils == "legs" || ils == "chest" else { throw fail("idleLegs 必须是 \"legs\" 或 \"chest\"") }
             spec.idleLegsTinted = ils == "legs"
         }
+        if let rs = root["renderStyle"] as? String, let style = SkinRenderStyle(rawValue: rs) {
+            spec.renderStyle = style
+        }
+        if let ts = root["typingStyle"] as? String, let style = SkinTypingStyle(rawValue: ts) {
+            spec.typingStyle = style
+        }
 
         // Regions (pen-tool curve areas)
         if let regsAny = root["regions"], !isNull(regsAny) {
@@ -1536,6 +1777,210 @@ final class SkinLibrary {
     func remove(id: String) -> Bool {
         guard id.count == 16, id.allSatisfy({ "0123456789abcdef".contains($0) }) else { return false }
         let ok = (try? FileManager.default.removeItem(at: Self.directory.appendingPathComponent("\(id).kurocat"))) != nil
+        reload()
+        return ok
+    }
+}
+
+// MARK: - Custom Keyboard & Mouse Skins (.kurokb / keyboard.json)
+
+struct KeyboardSkinSpec: Equatable {
+    var id = ""
+    var name = ""
+    var author = ""
+    var builtIn = false
+    var mouseBody = SkinColor.rgba(0.955, 0.950, 0.925)
+    var mouseBorder = SkinColor.rgba(0.14, 0.14, 0.16)
+    var wheel = SkinColor.rgba(0.96, 0.69, 0.16)
+    var base = SkinColor.rgba(0.10, 0.10, 0.12)
+    var deck = SkinColor.rgba(0.14, 0.14, 0.16)
+    var key = SkinColor.rgba(0.968, 0.964, 0.942)
+    var keyBorder = SkinColor.rgba(0.78, 0.77, 0.74, 0.75)
+    var accent = SkinColor.rgba(0.97, 0.70, 0.16)
+    var darkText = true
+
+    static let maxFileBytes = 256 * 1024
+    static let formatVersion = 1
+
+    static func builtIn(_ theme: KeyboardTheme) -> KeyboardSkinSpec {
+        switch theme {
+        case .classicMilk:
+            return KeyboardSkinSpec(
+                id: "builtin:0", name: theme.rawValue, author: "KuroCat", builtIn: true,
+                mouseBody: .rgba(0.955, 0.950, 0.925),
+                mouseBorder: .rgba(0.14, 0.14, 0.16),
+                wheel: .rgba(0.96, 0.69, 0.16),
+                base: .rgba(0.10, 0.10, 0.12),
+                deck: .rgba(0.14, 0.14, 0.16),
+                key: .rgba(0.968, 0.964, 0.942),
+                keyBorder: .rgba(0.78, 0.77, 0.74, 0.75),
+                accent: .rgba(0.97, 0.70, 0.16),
+                darkText: true
+            )
+        case .midnightHacker:
+            return KeyboardSkinSpec(
+                id: "builtin:1", name: theme.rawValue, author: "KuroCat", builtIn: true,
+                mouseBody: .rgba(0.20, 0.21, 0.24),
+                mouseBorder: .rgba(0.08, 0.08, 0.10),
+                wheel: .rgba(0.77, 0.94, 0.25),
+                base: .rgba(0.06, 0.06, 0.08),
+                deck: .rgba(0.10, 0.11, 0.13),
+                key: .rgba(0.21, 0.22, 0.25),
+                keyBorder: .rgba(0.11, 0.11, 0.13, 0.95),
+                accent: .rgba(0.77, 0.94, 0.25),
+                darkText: false
+            )
+        case .retroCream:
+            return KeyboardSkinSpec(
+                id: "builtin:2", name: theme.rawValue, author: "KuroCat", builtIn: true,
+                mouseBody: .rgba(0.90, 0.88, 0.82),
+                mouseBorder: .rgba(0.28, 0.26, 0.24),
+                wheel: .rgba(0.88, 0.42, 0.24),
+                base: .rgba(0.25, 0.24, 0.22),
+                deck: .rgba(0.38, 0.36, 0.33),
+                key: .rgba(0.90, 0.88, 0.82),
+                keyBorder: .rgba(0.68, 0.65, 0.60, 0.85),
+                accent: .rgba(0.88, 0.42, 0.24),
+                darkText: true
+            )
+        }
+    }
+
+    static func load(contentsOf url: URL) throws -> KeyboardSkinSpec {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        if let size = attrs?[.size] as? NSNumber, size.intValue > maxFileBytes {
+            throw SkinError(message: "键盘皮肤文件超过 256 KB 上限")
+        }
+        guard let data = try? Data(contentsOf: url) else { throw SkinError(message: "无法打开这个键盘皮肤文件") }
+        return try parse(data)
+    }
+
+    static func parse(_ data: Data) throws -> KeyboardSkinSpec {
+        func fail(_ message: String) -> SkinError { SkinError(message: message) }
+        if data.count > maxFileBytes { throw fail("键盘皮肤文件超过 256 KB 上限") }
+        if data.isEmpty { throw fail("键盘皮肤文件是空的") }
+        let rootAny: Any
+        do { rootAny = try JSONSerialization.jsonObject(with: data, options: []) }
+        catch { throw fail("不是有效的 JSON（请检查逗号、引号和括号）") }
+        guard let root = rootAny as? [String: Any] else { throw fail("键盘皮肤最外层必须是 JSON 对象 { … }") }
+
+        func isNull(_ v: Any?) -> Bool { v == nil || v is NSNull }
+        func color(_ v: Any?, _ field: String) throws -> SkinColor? {
+            if isNull(v) { return nil }
+            guard let s = v as? String else { throw fail("\(field) 必须是 \"#RRGGBB\" 或 \"#RRGGBBAA\" 颜色字符串") }
+            let chars = Array(s.utf8)
+            guard (chars.count == 7 || chars.count == 9), chars[0] == UInt8(ascii: "#") else {
+                throw fail("\(field) 颜色格式应为 #RRGGBB 或 #RRGGBBAA")
+            }
+            var vals = [0, 0, 0, 255]
+            for i in 1..<chars.count {
+                let c = chars[i]
+                let d: Int
+                switch c {
+                case UInt8(ascii: "0")...UInt8(ascii: "9"): d = Int(c) - 48
+                case UInt8(ascii: "a")...UInt8(ascii: "f"): d = Int(c) - 87
+                case UInt8(ascii: "A")...UInt8(ascii: "F"): d = Int(c) - 55
+                default: throw fail("\(field) 颜色里有非十六进制字符")
+                }
+                let k = (i - 1) / 2
+                if (i - 1) % 2 == 0 { vals[k] = 0 }
+                vals[k] = vals[k] * 16 + d
+            }
+            return .rgba(CGFloat(vals[0]) / 255, CGFloat(vals[1]) / 255, CGFloat(vals[2]) / 255, CGFloat(vals[3]) / 255)
+        }
+        func trimmed(_ s: String, _ maxChars: Int) -> String {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines).unicodeScalars.filter { $0.value >= 0x20 }
+            return String(String.UnicodeScalarView(t.prefix(maxChars)))
+        }
+
+        if let ver = root["formatVersion"], !isNull(ver) {
+            guard let vn = (ver as? NSNumber)?.doubleValue, vn == vn.rounded() else { throw fail("formatVersion 必须是整数") }
+            if vn > Double(formatVersion) { throw fail("这个键盘皮肤使用了更新的格式，请先升级 KuroCat") }
+            if vn < 1 { throw fail("formatVersion 无效") }
+        }
+        guard let nameRaw = root["name"] as? String else { throw fail("缺少键盘皮肤名称 name") }
+        let name = trimmed(nameRaw, 40)
+        if name.isEmpty { throw fail("键盘皮肤名称 name 不能为空") }
+        var author = ""
+        if let aRaw = root["author"] as? String { author = trimmed(aRaw, 40) }
+
+        guard let cols = root["colors"] as? [String: Any] else { throw fail("缺少键盘配色对象 colors") }
+        guard let key = try color(cols["key"], "colors.key") else { throw fail("缺少键帽颜色 colors.key") }
+        let deck = try color(cols["deck"], "colors.deck") ?? .rgba(0.14, 0.14, 0.16)
+        let base = try color(cols["base"], "colors.base") ?? .rgba(deck.r * 0.72, deck.g * 0.72, deck.b * 0.72)
+        let keyBorder = try color(cols["keyBorder"], "colors.keyBorder") ?? .rgba(deck.r, deck.g, deck.b, 0.78)
+        let accent = try color(cols["accent"], "colors.accent") ?? .rgba(0.97, 0.70, 0.16)
+        let mouseBody = try color(cols["mouseBody"], "colors.mouseBody") ?? key
+        let mouseBorder = try color(cols["mouseBorder"], "colors.mouseBorder") ?? base
+        let wheel = try color(cols["wheel"], "colors.wheel") ?? accent
+        let darkText = (cols["darkText"] as? Bool) ?? (key.luminance >= 0.45)
+
+        return KeyboardSkinSpec(
+            id: SkinSpec.contentId(data), name: name, author: author, builtIn: false,
+            mouseBody: mouseBody, mouseBorder: mouseBorder, wheel: wheel,
+            base: base, deck: deck, key: key, keyBorder: keyBorder, accent: accent,
+            darkText: darkText
+        )
+    }
+
+    /// Quick sniffer to distinguish a keyboard JSON from a cat `.kurocat` JSON when dropping `.json` files.
+    static func looksLikeKeyboardJSON(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        if ext == "kurokb" { return true }
+        guard ext == "json",
+              let data = try? Data(contentsOf: url),
+              data.count <= maxFileBytes,
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              obj["colors"] is [String: Any] else { return false }
+        return true
+    }
+}
+
+final class KeyboardSkinLibrary {
+    static let shared = KeyboardSkinLibrary()
+    private(set) var skins: [KeyboardSkinSpec] = []
+
+    private init() { reload() }
+
+    static var directory: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
+        return base.appendingPathComponent("KuroCat/keyboards", isDirectory: true)
+    }
+
+    func reload() {
+        let fm = FileManager.default
+        let files = (try? fm.contentsOfDirectory(at: Self.directory, includingPropertiesForKeys: nil)) ?? []
+        skins = files.filter { ["kurokb", "json"].contains($0.pathExtension.lowercased()) }
+            .compactMap { try? KeyboardSkinSpec.load(contentsOf: $0) }
+            .sorted { $0.name < $1.name }
+    }
+
+    func skin(id: String) -> KeyboardSkinSpec? {
+        id.isEmpty ? nil : skins.first { $0.id == id }
+    }
+
+    func importFile(_ url: URL) throws -> String {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        if let size = attrs?[.size] as? NSNumber, size.intValue > KeyboardSkinSpec.maxFileBytes {
+            throw SkinError(message: "键盘皮肤文件超过 256 KB 上限")
+        }
+        guard let data = try? Data(contentsOf: url) else { throw SkinError(message: "无法打开这个文件") }
+        let spec = try KeyboardSkinSpec.parse(data)
+        do {
+            try FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
+            try data.write(to: Self.directory.appendingPathComponent("\(spec.id).kurokb"), options: .atomic)
+        } catch {
+            throw SkinError(message: "保存键盘皮肤失败：无法写入 \(Self.directory.path)")
+        }
+        reload()
+        return spec.id
+    }
+
+    @discardableResult
+    func remove(id: String) -> Bool {
+        guard id.count == 16, id.allSatisfy({ "0123456789abcdef".contains($0) }) else { return false }
+        let ok = (try? FileManager.default.removeItem(at: Self.directory.appendingPathComponent("\(id).kurokb"))) != nil
         reload()
         return ok
     }
