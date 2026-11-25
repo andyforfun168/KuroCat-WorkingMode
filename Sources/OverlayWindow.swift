@@ -132,6 +132,9 @@ final class CatCanvasView: NSView {
     private var resizeStartFrame: CGRect = .zero
     private var dragStartScreenPt: CGPoint = .zero
     private var dragStartWindowOrigin: CGPoint = .zero
+    private var dragInitialCanvasOffset: CGPoint = .zero
+    private var dragLastCursorScreenPoint: CGPoint = .zero
+    private var dragUsesBackGrip = false
     private var isShowingOpenHand = false
     private var lastDrawnPose: RenderedPose?
 
@@ -324,7 +327,16 @@ final class CatCanvasView: NSView {
         isDragging = true
         dragStartScreenPt = screenPt
         dragStartWindowOrigin = win.frame.origin
+        dragLastCursorScreenPoint = screenPt
+        let clickedCanvas = canvasPoint(fromScreenPoint: screenPt)
         physics.setDragging(true, dragDx: 0)
+        dragUsesBackGrip = CatSettings.shared.activeSkin.renderStyle != .douni && !CatSettings.shared.isEditMode
+        if dragUsesBackGrip, let clickedCanvas {
+            let s = CatSettings.shared
+            let back = CatRenderer.catSpacePointToCanvas(CatRenderer.scruffBackGrip(physics: physics, lift: 0),
+                                                        flipped: s.flipHorizontal, rotationDeg: s.rotationDeg)
+            dragInitialCanvasOffset = CGPoint(x: clickedCanvas.x - back.x, y: clickedCanvas.y - back.y)
+        } else { dragInitialCanvasOffset = .zero }
         NSCursor.closedHand.set()
     }
 
@@ -368,20 +380,34 @@ final class CatCanvasView: NSView {
             return
         }
         guard isDragging else { return }
-        let prevX = win.frame.origin.x
-        let prevY = win.frame.origin.y
-        let newOrigin = CGPoint(
-            x: dragStartWindowOrigin.x + (currentScreenPt.x - dragStartScreenPt.x),
-            y: dragStartWindowOrigin.y + (currentScreenPt.y - dragStartScreenPt.y)
-        )
-        let rawDx = newOrigin.x - prevX
-        let rawDy = -(newOrigin.y - prevY)
+        // Inertia follows actual pointer motion, never the window's anchor compensation.
+        let rawDx = currentScreenPt.x - dragLastCursorScreenPoint.x
+        let rawDy = -(currentScreenPt.y - dragLastCursorScreenPoint.y)
+        dragLastCursorScreenPoint = currentScreenPt
         // Transform world drag velocity into cat-local orientation so trailing inertia matches world motion at any angle!
         let rad = -CatSettings.shared.rotationDeg * .pi / 180.0
         let localDx = rawDx * cos(rad) - rawDy * sin(rad)
         let localDy = rawDx * sin(rad) + rawDy * cos(rad)
         physics.setDragging(true, dragDx: CatSettings.shared.flipHorizontal ? -localDx : localDx, dragDy: localDy)
-        win.setFrameOrigin(newOrigin)
+        if dragUsesBackGrip {
+            alignScruffBackToCursor(screenPoint: currentScreenPt)
+        } else {
+            win.setFrameOrigin(CGPoint(x: dragStartWindowOrigin.x + currentScreenPt.x - dragStartScreenPt.x,
+                                       y: dragStartWindowOrigin.y + currentScreenPt.y - dragStartScreenPt.y))
+        }
+    }
+
+    /// Re-evaluate after each physics tick, including when the cursor is held still.
+    func alignScruffBackToCursor(screenPoint: CGPoint? = nil) {
+        guard isDragging && dragUsesBackGrip, let win = window else { return }
+        let s = CatSettings.shared
+        let anchor = CatRenderer.dragAnchorCanvasPoint(physics: physics, initialOffset: dragInitialCanvasOffset,
+                                                      flipped: s.flipHorizontal, rotationDeg: s.rotationDeg)
+        let origin = CatRenderer.anchoredWindowOrigin(cursor: screenPoint ?? NSEvent.mouseLocation,
+                                                     anchorCanvas: anchor, windowSize: win.frame.size)
+        if hypot(origin.x - win.frame.origin.x, origin.y - win.frame.origin.y) > 0.05 {
+            win.setFrameOrigin(origin)
+        }
     }
 
     override func mouseUp(with event: NSEvent) {
